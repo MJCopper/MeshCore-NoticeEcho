@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %} &middot; MeshCore Settings{% endblock %}
+{% block content %}
+{% with breadcrumb_label = 'MeshCore companion' %}{% include "_settings_breadcrumbs.html" %}{% endwith %}
+<div class="topbar">
+  <h2 class="pt">MeshCore Settings</h2>
+  <a class="see" href="/meshcore/settings">Refresh</a>
+</div>
+{% if saved_label %}<p class="hint">{{ saved_label }} saved on the radio.</p>{% endif %}
+{% if error %}<div class="panel"><p>{{ error }}</p></div>{% endif %}
+{% if created_channel %}
+  <div class="panel">
+    <h3>Channel {{ created_channel.index }} added: {{ created_channel.name }}</h3>
+    {% if created_channel.secret_hex %}
+      <p>Copy this private channel key now. It is shown only on this response and is needed on other devices joining the channel.</p>
+      <div class="rec-msg">{{ created_channel.secret_hex }}</div>
+    {% elif created_channel.name.startswith("#") %}<p class="hint">The key is derived from the name. Use the same name on other devices.</p>
+    {% else %}<p class="hint">The supplied channel key was saved on the companion.</p>{% endif %}
+  </div>
+{% endif %}
+{% if device %}
+  <section class="panel">
+    <h3>Companion radio</h3>
+    <div class="row">
+      <div><span class="fld-lbl">Model</span><div>{{ device.model or "Unknown" }}</div></div>
+      <div><span class="fld-lbl">Firmware</span><div>{{ device.firmware or "Unknown" }}</div></div>
+      <div><span class="fld-lbl">Battery</span><div>{{ device.battery_mv ~ " mV" if device.battery_mv is not none else "Unknown" }}</div></div>
+    </div>
+    <form method="post" action="/meshcore/settings/name">
+      <label for="device-name">Device name</label>
+      <div class="row" style="align-items:end;">
+        <div><input id="device-name" name="name" value="{{ device.name }}" maxlength="32" required></div>
+        <div><button type="submit">Save name</button></div>
+          <label class="chk"><input type="checkbox" name="allow_key_change" value="true">Allow a # name to change this channel’s key. Other devices must use the new name.</label>
+      </div>
+    </form>
+  </section>
+  <section class="panel">
+    <h3>Radio parameters</h3>
+    {% if device.get('max_tx_power') is not none %}
+    <form method="post" action="/meshcore/settings/tx-power">
+      <label for="tx-power">TX power (dBm, maximum {{ device.max_tx_power }})</label>
+      <div class="row" style="align-items:end;">
+        <div><input id="tx-power" name="power" type="number" min="0" max="{{ device.max_tx_power }}" step="1" value="{{ device.tx_power if device.tx_power is not none else '' }}" required></div>
+        <div><button type="submit">Save TX power</button></div>
+      </div>
+    </form>
+    {% else %}<p class="hint">TX power limit was not reported by the radio.</p>{% endif %}
+    {% if device.radio_freq is not none and device.radio_bw is not none and device.radio_sf is not none and device.radio_cr is not none %}
+    <form method="post" action="/meshcore/settings/radio">
+      <div class="row">
+        <div><label for="radio-freq">Frequency (MHz)</label><input id="radio-freq" name="freq" type="number" min="100" max="2500" step="0.001" value="{{ device.radio_freq }}" required></div>
+        <div><label for="radio-bw">Bandwidth (kHz)</label><input id="radio-bw" name="bw" type="number" min="1" max="2500" step="0.001" value="{{ device.radio_bw }}" required></div>
+        <div><label for="radio-sf">Spreading factor</label><select id="radio-sf" name="sf">{% for value in range(5, 13) %}<option value="{{ value }}" {% if value == device.radio_sf %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></div>
+        <div><label for="radio-cr">Coding rate</label><select id="radio-cr" name="cr">{% for value in range(5, 9) %}<option value="{{ value }}" {% if value == device.radio_cr %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></div>
+      </div>
+      <button type="submit" style="margin-top:12px;">Save radio parameters</button>
+    </form>
+    {% else %}<p class="hint">Radio parameters were not reported by the companion.</p>{% endif %}
+  </section>
+  <section class="panel">
+    <h3>Channels</h3>
+    <p class="hint">Companion capacity: {{ device.max_channels }} slots. Names beginning with # derive their key from the name. Other renames preserve the existing key.</p>
+    {% for channel in device.channels %}
+      <form method="post" action="/meshcore/settings/channel/{{ channel.index }}">
+        <label for="channel-{{ channel.index }}">{{ channel.index }} &middot; {{ channel.name }}</label>
+        <div class="row" style="align-items:end;">
+          <div><input id="channel-{{ channel.index }}" name="name" value="{{ channel.name }}" maxlength="32" required></div>
+          <div><button type="submit">Save name</button></div>
+          <label class="chk"><input type="checkbox" name="allow_key_change" value="true">Allow a # name to change this channel’s key. Other devices must use the new name.</label>
+        </div>
+      </form>
+      {% if channel.index > 0 %}
+        <form method="post" action="/meshcore/settings/channel/{{ channel.index }}/remove" onsubmit="return confirm('Remove channel {{ channel.index }} from this companion? Other devices will keep their copy.');">
+          {% set in_use = channel.index == live_channel or channel.index == test_channel %}
+          <button type="submit" class="secondary" {% if in_use %}disabled{% endif %}>Remove channel {{ channel.index }}</button>
+          {% if in_use %}<span class="hint">Change the Live or Test channel in Settings before removing this channel.</span>{% endif %}
+        </form>
+      {% endif %}
+    {% else %}<p class="hint">No configured channels reported.</p>{% endfor %}
+    {% if device.available_slots %}
+      <form method="post" action="/meshcore/settings/channels/add" autocomplete="off">
+        <h4>Add channel</h4>
+        <p class="hint">Uses the first empty non-default slot. For # names, leave the key blank; it is derived from the name. Leave the key blank to generate a new one, or enter the 32-character hexadecimal key of an existing channel. If that slot is already selected as Live or Test in Settings, the new channel will take that role.</p>
+        <label for="new-channel-name">Channel name</label>
+        <input id="new-channel-name" name="name" maxlength="32" required>
+        <label for="new-channel-key">Existing channel key (optional)</label>
+        <input id="new-channel-key" name="secret_hex" pattern="[0-9a-fA-F]{32}" maxlength="32" spellcheck="false" placeholder="Leave blank to generate a new key">
+        <button type="submit" style="margin-top:12px;">Add channel</button>
+      </form>
+    {% else %}<p class="hint">No empty private channel slots are available.</p>{% endif %}
+  </section>
+{% endif %}
+{% endblock %}

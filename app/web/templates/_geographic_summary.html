@@ -1,0 +1,4 @@
+<div class="panel"><h3>Geographic Coverage</h3>
+{% if geographic_policy and geographic_policy.active %}<p>Universal coverage: {% if geographic_policy.all_nsw %}All NSW{% else %}{{ geographic_policy.councils|length }} councils, {{ geographic_policy.location_terms|length }} location terms{% endif %}. Uncertain geography fallback {{ 'enabled' if geographic_policy.include_uncertain else 'disabled' }}.</p>{% if geographic_policy.bom_districts %}<p>Existing BOM district terms await review and merging into the shared list.</p>{% endif %}
+{% else %}<p>Existing service coverage remains active while universal coverage awaits review and activation.</p>{% endif %}
+<p><a href="/settings/geography">Review or change Geographic Coverage</a></p></div>

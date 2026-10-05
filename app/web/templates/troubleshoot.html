@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %} &middot; Troubleshoot{% endblock %}
+{% block content %}
+<h2>Troubleshoot</h2>
+
+{% include "_troubleshooting_dashboard.html" %}
+
+<div class="panel">
+  <h3>Send test message</h3>
+  <p class="hint">Keys up a radio with <code>NoticeEcho test</code>. It always sends,
+    even when broadcasting is paused, and goes out on the <strong>test channel</strong>
+    (channel 1, the second channel), never the live alert channel. Use this to confirm
+    a radio actually transmits before you rely on it.</p>
+  {% set on = transports | selectattr("enabled") | list %}
+  {% if on %}
+  <div style="display:flex;flex-wrap:wrap;gap:10px;">
+    {% for t in on %}
+    <button hx-post="/troubleshoot/test/{{ t.name }}" hx-target="#test-result"
+            hx-swap="innerHTML">Test {{ t.label }}</button>
+    {% endfor %}
+    {% if on | length > 1 %}
+    <button class="secondary" hx-post="/troubleshoot/test" hx-target="#test-result"
+            hx-swap="innerHTML">Test all radios</button>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="hint">No radio configured. Set up MeshCore in <a href="/settings">Settings</a>.</p>
+  {% endif %}
+  <div id="test-result" style="margin-top:12px;"></div>
+</div>
+
+<div class="panel">
+  <h3>Last raw BOM feed response</h3>
+  <button class="secondary" hx-get="/troubleshoot/raw" hx-target="#raw"
+          hx-swap="innerHTML">Load latest</button>
+  <pre id="raw" class="mono" style="white-space:pre-wrap;word-break:break-word;
+       max-height:400px;overflow:auto;background:var(--bg);padding:12px;
+       border-radius:8px;margin-top:12px;"></pre>
+</div>
+
+{% include "_errors.html" %}
+{% endblock %}
+

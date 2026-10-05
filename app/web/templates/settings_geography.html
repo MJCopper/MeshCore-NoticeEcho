@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+{% with breadcrumb_label = 'Geographic Coverage' %}{% include "_settings_breadcrumbs.html" %}{% endwith %}
+<h2>Geographic Coverage</h2>
+<p>One geographic policy for BOM, NSW RFS and Live Traffic NSW.</p>
+{% if saved %}<p class="panel">Coverage saved. Eligible current notices are reconsidered on polling; confirmed notices are not automatically resent.</p>{% endif %}
+{% if error %}<p class="panel" role="alert">{{ error }}</p>{% endif %}
+{% if not active %}
+<div class="panel"><h3>Review and activate universal coverage</h3>
+<p>Existing service filters remain active until you save and activate this policy. The proposed councils combine all saved service selections, including disabled services. Any existing All NSW selection becomes All NSW for every service. The proposed uncertainty fallback follows the existing BOM option and would apply to all services.</p>
+<table><thead><tr><th>Existing service</th><th>Monitoring</th><th>All NSW</th><th>Councils</th><th>Unknown fallback</th></tr></thead><tbody>{% for row in legacy %}<tr><td>{{ row.service }}</td><td>{{ 'Enabled' if row.enabled else 'Disabled' }}</td><td>{{ 'Yes' if row.all_nsw else 'No' }}</td><td>{{ row.councils|join(', ') or 'None' }}</td><td>{{ 'Yes' if row.uncertain else 'No' }}</td></tr>{% endfor %}</tbody></table>
+<p>Edit the proposal and preview it before activation. Activation does not enable services or bulk resend confirmed notices.</p></div>
+{% endif %}
+{% if pending_merge %}<div class="panel"><h3>Review shared location terms</h3><p>Your existing BOM forecast districts have been merged into the proposed location terms below, with duplicates removed. Former BOM-only terms will apply to RFS and Traffic affected-location fields too. The current policy remains active until you save. Review the coverage comparison before saving; confirmed notices will not be automatically resent.</p></div>{% endif %}
+<form method="post" action="/settings/geography">
+<div class="panel"><h3>Coverage</h3>
+<p>Include notices matching <strong>All NSW OR a selected council OR an additional location term</strong>. Notice types, alert levels, expiry and service enablement still apply.</p>
+<label class="chk"><input type="checkbox" name="all_nsw" value="1" {% if policy.all_nsw %}checked{% endif %}> All NSW</label>
+<p class="hint">Includes established NSW notices even without a resolved council. Saved selections below remain available when All NSW is switched off.</p>
+<label>Find a council</label><input type="search" placeholder="Search council areas" oninput="document.querySelectorAll('#geographic-councils label').forEach(e => e.hidden = !e.textContent.toLowerCase().includes(this.value.toLowerCase()))">
+<div id="geographic-councils" class="checkgrid" style="max-height:320px;overflow:auto;margin-top:12px">{% for council in councils %}<label class="chk"><input type="checkbox" name="councils" value="{{ council }}" {% if council in policy.councils %}checked{% endif %}> {{ council }}</label>{% endfor %}</div>
+<label>Additional location terms (one per line)</label><textarea name="location_terms" rows="5" placeholder="Hunter&#10;New England&#10;Moonbi&#10;New England Highway">{{ policy.location_terms|join('\n') }}</textarea>
+<p class="hint">Towns, suburbs, roads and BOM forecast districts. Applied to affected-location fields across all services. Matches whole words or phrases in affected-location fields, ignoring case and punctuation. Terms do not infer boundaries: New England does not automatically match every town within New England. Up to 400 terms, each up to 120 characters.</p>
+<label class="chk"><input type="checkbox" name="include_uncertain" value="1" {% if policy.include_uncertain %}checked{% endif %}> Include notices with uncertain geographic coverage</label>
+<p class="hint">Can include notices without an explicit location match when geography or NSW jurisdiction is unresolved. Without this option, unresolved NSW jurisdiction is excluded. Requires coverage applicable to that service; proven non-NSW notices remain excluded. With All NSW off and no applicable selections, notices are excluded.</p>
+</div>
+<button type="submit" name="action" value="preview">Preview coverage</button>
+<button type="submit" name="action" value="save">{{ 'Save shared location terms' if pending_merge else 'Save coverage' if active else 'Save and activate universal coverage' }}</button>
+</form>
+{% if summaries %}<div class="panel"><h3>{{ 'Coverage preview' if preview else 'Migration comparison' }}</h3><p>Geographic eligibility of saved current notices only. No fetching, saving or transmitting occurs. Other service filters may exclude geographically eligible notices. Results reflect available saved evidence and applicable cancellation or closure exceptions for previously transmitted notices.</p>
+<table><thead><tr><th>Service</th><th>Monitoring</th><th>Notices</th><th>Newly included</th><th>Newly excluded</th></tr></thead><tbody>{% for row in summaries %}<tr><td>{{ row.service }}</td><td>{{ 'Enabled' if row.enabled else 'Disabled' }}</td><td>{{ row.notices }}</td><td>{{ row.added }}</td><td>{{ row.removed }}</td></tr>{% endfor %}</tbody></table>
+{% if comparisons %}<table><thead><tr><th>Notice</th><th>Current policy</th><th>Proposed policy</th></tr></thead><tbody>{% for row in comparisons %}<tr><td>{{ row.source }}: {{ row.title }}{% if row.changed %}<br>Coverage changes{% endif %}</td><td>{{ row.previous.reason }}{% with coverage = row.previous %}{% include "_geographic_evidence.html" %}{% endwith %}</td><td>{{ row.coverage.reason }}{% with coverage = row.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td></tr>{% endfor %}</tbody></table>{% else %}<p>No saved current notices to compare. Poll enabled services to collect notices.</p>{% endif %}</div>{% endif %}
+{% endblock %}

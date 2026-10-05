@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %} &middot; Settings{% endblock %}
+{% block content %}
+{% with breadcrumb_label = '' %}{% include "_settings_breadcrumbs.html" %}{% endwith %}
+<h2>Settings</h2>
+<div class="grid">
+  <a class="panel" href="/settings/geography"><h3>Geographic Coverage</h3><p class="hint">Universal councils and location terms, including BOM districts</p></a>
+  <a class="panel" href="/settings/general"><h3>General</h3><p class="hint">Timezone and Dry Run</p></a>
+  <a class="panel" href="/settings/bom"><h3>BOM</h3><p class="hint">Products and polling</p></a>
+  <a class="panel" href="/settings/rfs"><h3>NSW RFS</h3><p class="hint">Monitoring and alert levels</p></a>
+  <a class="panel" href="/settings/traffic"><h3>Live Traffic NSW</h3><p class="hint">Monitoring and hazard feeds</p></a>
+  <a class="panel" href="/settings/meshcore"><h3>MeshCore connection</h3><p class="hint">USB or TCP, Live and Test channels</p></a>
+  <a class="panel" href="/meshcore/settings"><h3>MeshCore companion</h3><p class="hint">Device settings and channel management</p></a>
+</div>
+{% endblock %}

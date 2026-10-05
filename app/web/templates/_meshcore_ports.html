@@ -1,0 +1,10 @@
+<label for="meshcore_detected_port">USB serial device</label>
+<select id="meshcore_detected_port" onchange="if (this.value) { const port = document.getElementById('meshcore_port'); port.value = this.value; port.dispatchEvent(new Event('input', { bubbles: true })); }">
+  <option value="">{% if devices %}Select a USB serial device...{% else %}No devices found in /dev/serial/by-id/.{% endif %}</option>
+  {% if current_port and current_port not in devices %}
+  <option value="{{ current_port }}" selected>{{ current_port }} (saved path, currently unavailable)</option>
+  {% endif %}
+  {% for device in devices %}
+  <option value="{{ device }}" {% if device == current_port %}selected{% endif %}>{{ device }}</option>
+  {% endfor %}
+</select>

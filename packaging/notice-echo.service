@@ -1,0 +1,22 @@
+[Unit]
+Description=Meshcore NoticeEcho - BOM, NSW RFS and Traffic over MeshCore
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Populated by install-linux.sh:
+#   __USER__    the service account (added to the dialout group for serial)
+#   __DIR__     install directory (holds the virtualenv + source)
+User=__USER__
+Group=dialout
+WorkingDirectory=__DIR__
+Environment=NOTICE_ECHO_HOST=0.0.0.0
+Environment=NOTICE_ECHO_PORT=8110
+Environment=NOTICE_ECHO_DB=__DIR__/data/__DB__
+ExecStart=__DIR__/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

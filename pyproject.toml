@@ -1,0 +1,20 @@
+[project]
+name = "noticeecho"
+version = "1.1.2"
+description = "Meshcore NoticeEcho: BOM, NSW RFS and Traffic notices over MeshCore"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["meshcore", "bom", "australia", "weather", "alerts", "lora"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.setuptools]
+packages = ["app", "app.web", "app.rfs", "app.traffic"]
+
+[tool.setuptools.package-data]
+"app.traffic" = ["*.geojson.gz"]

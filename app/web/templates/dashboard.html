@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %} &middot; Dashboard{% endblock %}
+{% block content %}
+{% include "_dash_top.html" %}
+
+<div class="cols" id="dash-cols"
+     hx-get="/partials/dashboard" hx-trigger="every 10s" hx-swap="innerHTML">
+  {% include "_dash_cols.html" %}
+</div>
+
+{% endblock %}
+

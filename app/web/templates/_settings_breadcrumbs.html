@@ -1,0 +1,11 @@
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <ol>
+    <li><a href="/">Home</a></li>
+    {% if breadcrumb_label %}
+    <li><a href="/settings">Settings</a></li>
+    <li><span aria-current="page">{{ breadcrumb_label }}</span></li>
+    {% else %}
+    <li><span aria-current="page">Settings</span></li>
+    {% endif %}
+  </ol>
+</nav>
