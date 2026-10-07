@@ -1,5 +1,5 @@
 <div class="panel" style="background:var(--bg);">
-  {% if ok %}<span class="pill ok">{{ message }}</span>
+  {% if ok %}<span class="pill {{ 'muted' if ok.outcome is defined and ok.outcome == 'unconfirmed' else 'ok' }}">{{ message }}</span>
   {% else %}<span class="pill bad">{{ message }}</span>{% endif %}
   <div style="margin-top:8px;">
     <code>{{ text }}</code>

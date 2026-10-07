@@ -28,6 +28,20 @@
     </div>
   </div>
 
+  <div class="panel">
+    <h3>Transmission confirmation and retries</h3>
+    <label><input type="checkbox" name="meshcore_repeat_detection" value="1" {% if s.get('meshcore_repeat_detection', true) %}checked{% endif %}> Use matching heard repeats as confirmation</label>
+    <p class="hint">A matching repeat confirms that another node retransmitted this part. It does not guarantee reception by every intended receiver. No heard repeat does not prove failure.</p>
+    <label>Initial confirmation wait (seconds)</label>
+    <input type="number" name="meshcore_confirmation_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_confirmation_seconds', 5) }}">
+    <label><input type="checkbox" name="meshcore_retry_unconfirmed" value="1" {% if s.get('meshcore_retry_unconfirmed', false) %}checked{% endif %}> Retry unconfirmed transmissions once</label>
+    <p class="hint">Off by default. An unconfirmed part may already have arrived, so retrying can produce a duplicate. Remaining parts continue even when confirmation is unavailable.</p>
+    <label>Delay before optional retry (seconds)</label>
+    <input type="number" name="meshcore_retry_delay_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_retry_delay_seconds', 5) }}">
+    <label>Track late heard repeats for (seconds)</label>
+    <input type="number" name="meshcore_late_repeat_seconds" min="10" max="300" step="1" value="{{ s.get('meshcore_late_repeat_seconds', 60) }}">
+    <p class="hint">Late repeats update history and cancel a pending retry. The policy is saved with each queued notice.</p>
+  </div>
   <button type="submit">Save MeshCore connection</button>
 </form>
 <script>

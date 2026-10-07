@@ -14,31 +14,30 @@ import logging
 from hashlib import sha256
 import math
 import secrets
+import inspect
+import json
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import (BURST_GAP_SECONDS, REPEAT_GAP_SECONDS, QUEUE_MAX, QUEUE_BYTE_MAX, MAX_PAYLOAD_BYTES,
+from .config import (BURST_GAP_SECONDS, QUEUE_MAX, QUEUE_BYTE_MAX, MAX_PAYLOAD_BYTES,
                      MESHCORE_CHANNEL_TEXT_BYTES)
 
 
 class TxUnsent(Exception):
-    """Raised when a radio did not actually transmit a message. `category` tells
-    the sender WHY, so it can apply the right correction instead of blindly
-    retrying:
-      'duty_cycle' - radio hit its airtime/duty-cycle cap: wait, then retry
-      'queue_full' - the radio's TX queue is full: wait for it to drain, retry
-      'too_large'  - message exceeds the radio payload: shrink it (unrecoverable here)
-      'no_channel' - the configured channel index does not exist: config error
-      'link'       - radio interface down / no response: reconnect, then retry
-      'unsent'     - radio accepted the command but did not key up: wait/reconnect
-      'unverified' - the local TX counter was unreadable: do not blindly retry
+    """Categorised pre-submission/legacy failure.
+
+    Explicit rejections can be recovered; unverified means potentially sent and
+    uses the separate uncertainty policy. A link timeout after submission must
+    never be treated as proof that a retry is safe.
     """
     def __init__(self, category: str, detail: str):
         super().__init__(detail)
         self.category = category
         self.detail = detail
+
+from .transmission import TransmissionPolicy, TxResult, RepeatTracker, channel_payload
 
 logger = logging.getLogger("wx_echo.tx")
 
@@ -49,7 +48,7 @@ class Transmitter(abc.ABC):
     @abc.abstractmethod
     async def connect(self) -> None: ...
     @abc.abstractmethod
-    async def send_text(self, text: str, channel: int) -> None: ...
+    async def send_text(self, text: str, channel: int) -> TxResult | None: ...
     @abc.abstractmethod
     async def close(self) -> None: ...
     @property
@@ -68,6 +67,17 @@ class MeshCoreTransmitter(Transmitter):
         self.conn, self.port, self.host, self.baud = conn, port, host, baud
         self._mc = None
         self._sender_name = None
+        self.policy = TransmissionPolicy()
+        self.repeat_tracker = RepeatTracker()
+        self._subscriptions = []
+        self.counter_capability = "unknown"
+        self.counter_error = ""
+        self.counter_checked_at = None
+        self.repeat_status = "not connected"
+        self.last_result = None
+        self._last_timestamp = 0
+        self._send_lock = asyncio.Lock()
+        self.on_submission = None
 
     @property
     def message_budget(self) -> int:
@@ -99,54 +109,204 @@ class MeshCoreTransmitter(Transmitter):
         self._sender_name = info.payload.get("name")
         if not isinstance(self._sender_name, str):
             raise RuntimeError("MeshCore sender name is unavailable")
+        self.counter_capability = "unknown"
+        self.counter_error = ""
+        self._subscribe_repeats()
 
-    async def send_text(self, text: str, channel: int) -> None:
+    def _subscribe_repeats(self):
+        from meshcore import EventType
+        if not self.policy.repeat_detection:
+            self.repeat_status = "disabled"
+            return
+        try:
+            self._subscriptions.append(self._mc.subscribe(EventType.RX_LOG_DATA, self.repeat_tracker.receive))
+            self.repeat_status = "listening; awaiting channel capability check"
+        except (AttributeError, TypeError) as exc:
+            self.repeat_status = "unavailable: %s" % exc
+
+    async def _prepare_repeat(self, result, text, channel):
+        if not self.policy.repeat_detection or not self._subscriptions:
+            return
+        try:
+            from meshcore import EventType
+            response = await asyncio.wait_for(self._mc.commands.get_channel(channel), 2.0)
+            if response is not None and response.type == EventType.ERROR and (response.payload or {}).get("error_code") == 2:
+                self._channel_exists = False
+            if response is None or response.type != EventType.CHANNEL_INFO:
+                raise ValueError("channel information unavailable")
+            self._channel_exists = True
+            secret = response.payload.get("channel_secret")
+            if isinstance(secret, str):
+                secret = bytes.fromhex(secret)
+            if not isinstance(secret, bytes):
+                raise ValueError("channel secret unavailable")
+            payload = channel_payload(secret, self._sender_name, text, result.timestamp)
+            # Listen throughout command preparation and confirmation, even with a short late window.
+            self.repeat_tracker.register(payload, result, 8 + self.policy.confirmation_seconds + self.policy.late_repeat_seconds)
+            self.repeat_status = "listening; exact packet matching available"
+        except Exception as exc:
+            self.repeat_status = "unavailable for this send: %s" % (str(exc) or type(exc).__name__)
+
+    async def send_text(self, text: str, channel: int) -> TxResult:
+        async with self._send_lock:
+            return await self._send_text(text, channel)
+
+    async def _send_text(self, text: str, channel: int) -> TxResult:
         if self._mc is None:
-            raise RuntimeError("not connected")
+            raise TxUnsent("link", "not connected before submission")
         size = len(text.encode("utf-8"))
         if size > self.message_budget:
             raise TxUnsent("too_large", f"message is {size} bytes; MeshCore allows {self.message_budget} with sender name")
-        # The device's OK/timeout is NOT proof of RF -- a channel broadcast has no
-        # ACK, so an "OK" only means the command was accepted, not that the radio
-        # keyed up. Confirm the actual transmission by watching the radio's own
-        # flood-TX counter advance (proven: it ticks by 1 per real send, and stays
-        # flat when the radio does not transmit).
+        if not 0 <= channel <= 255:
+            raise TxUnsent("no_channel", "channel must be between 0 and 255")
+        if "\x00" in text:
+            raise TxUnsent("too_large", "message contains a NUL character")
         from meshcore import EventType
-        before = await self._flood_tx()
-        res = await self._mc.commands.send_chan_msg(channel, text)
-        # Capture the device's own error reason, if it gave one, for diagnostics.
-        reason = ""
-        if getattr(res, "type", None) == EventType.ERROR:
-            payload = getattr(res, "payload", {}) or {}
-            reason = payload.get("reason", "") if isinstance(payload, dict) else ""
-        if getattr(res, "type", None) == EventType.ERROR:
-            raise TxUnsent("unsent", reason or "radio rejected channel message")
-        if before is None:
-            raise TxUnsent("unverified", "local TX counter unavailable; transmission cannot be confirmed")
-        counter_unreadable = False
-        for _ in range(15):                       # poll up to ~4.5s
-            await asyncio.sleep(0.3)
-            after = await self._flood_tx()
-            if after is None:
-                counter_unreadable = True
-            elif after > before:
-                return                            # verified locally (flood_tx advanced)
-        if counter_unreadable:
-            raise TxUnsent("unverified", "local TX counter became unreadable; transmission cannot be confirmed")
-        detail = "radio did not transmit (TX counter did not advance%s)" % (
-            "; %s" % reason if reason else "")
-        raise TxUnsent("unsent", detail)
-
-    async def _flood_tx(self):
+        self._last_timestamp = max(int(time.time()), self._last_timestamp + 1)
+        result = TxResult("unconfirmed", timestamp=self._last_timestamp)
+        started = time.monotonic()
+        self._channel_exists = None
+        await self._prepare_repeat(result, text, channel)
+        # The SDK requests also consume the deadline; baseline preparation is bounded.
+        before = None
+        for _ in range(2):
+            before = await self._bounded_counter(0.75)
+            if before is not None or self.counter_capability == "unsupported":
+                break
+        result.counter_before = before
+        if self.on_submission is not None:
+            self.on_submission(result)  # commit intent before any command bytes can be written
+        result.submitted = True
         try:
-            res = await self._mc.commands.get_stats_packets()
-            p = getattr(res, "payload", {}) or {}
-            v = p.get("flood_tx")
-            return int(v) if v is not None else None
-        except Exception:
+            command = self._mc.commands.send_chan_msg
+            parameters = inspect.signature(command).parameters
+            if "timestamp" in parameters:
+                response = await asyncio.wait_for(command(channel, text, timestamp=result.timestamp), 6.0)
+            else:
+                # Older SDKs cannot establish this packet identity reliably.
+                self.repeat_tracker.discard(result)
+                result.packet_id = ""
+                self.repeat_status = "unavailable: SDK does not support explicit send timestamps"
+                response = await asyncio.wait_for(command(channel, text), 6.0)
+            if response is not None and response.type == EventType.ERROR:
+                payload = response.payload or {}
+                if result.confirmed:
+                    result.detail = "Exact heard repeat confirmed transmission despite contradictory command error: %s" % (payload.get("reason") or payload.get("error_code", "unknown"))
+                    result.elapsed_seconds = time.monotonic() - started
+                    self.last_result = result
+                    return result
+                result.outcome = "rejected"
+                result.rejection_category = {1: "unsupported", 6: "invalid"}.get(payload.get("error_code"), "")
+                if payload.get("error_code") == 2 and self._channel_exists is False:
+                    result.rejection_category = "no_channel"
+                result.detail = str(payload.get("reason") or "radio rejected channel message (code %s)" % payload.get("error_code", "unknown"))
+                self.repeat_tracker.discard(result)
+                result.elapsed_seconds = time.monotonic() - started
+                self.last_result = result
+                return result
+            result.accepted = response is not None and response.type == getattr(EventType, "OK", "ok")
+            if not result.accepted:
+                result.detail = "command response unavailable; message may have transmitted"
+        except Exception as exc:
+            result.detail = "command response interrupted; message may have transmitted: %s" % (str(exc) or type(exc).__name__)
+        deadline = time.monotonic() + self.policy.confirmation_seconds
+        while time.monotonic() < deadline and not result.confirmed:
+            if before is not None:
+                after = await self._bounded_counter(min(0.75, max(0.001, deadline - time.monotonic())))
+                result.counter_after = after
+                if after is not None and after > before:
+                    if not result.confirmed:
+                        result.outcome = "local_confirmed"
+                    break
+                if after is not None and after < before:
+                    result.detail = "local TX counter reset; transmission cannot be confirmed locally"
+                    result.counter_reset = True
+                    before = None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(result.repeat_event.wait(), min(0.3, remaining))
+            except asyncio.TimeoutError:
+                pass
+        if not result.confirmed and not result.detail:
+            result.detail = ("local TX counter unavailable: " + (self.counter_error or "no baseline")
+                             if result.counter_before is None else "no local TX activity observed before confirmation timeout")
+        tracking = self.policy.late_repeat_seconds
+        if self.policy.retry_unconfirmed and not result.confirmed:
+            tracking = max(tracking, self.policy.retry_delay_seconds + 8 + self.policy.confirmation_seconds)
+        self.repeat_tracker.extend(result, tracking)
+        result.elapsed_seconds = time.monotonic() - started
+        self.last_result = result
+        return result
+
+    async def _bounded_counter(self, timeout):
+        if self.counter_capability == "unsupported":
+            return None
+        try:
+            return await asyncio.wait_for(self._flood_tx(), timeout)
+        except asyncio.TimeoutError:
+            self.counter_capability = "unavailable"
+            self.counter_error = "statistics request timed out"
+            self.counter_checked_at = time.time()
             return None
 
+    async def _flood_tx(self):
+        self.counter_checked_at = time.time()
+        try:
+            from meshcore import EventType
+            response = await self._mc.commands.get_stats_packets()
+            if response is None:
+                raise ValueError("statistics response missing")
+            payload = response.payload or {}
+            if response.type == EventType.ERROR:
+                if payload.get("error_code") == 1:
+                    self.counter_capability = "unsupported"
+                raise ValueError(str(payload.get("reason") or "statistics rejected (code %s)" % payload.get("error_code", "unknown")))
+            value = payload.get("flood_tx")
+            if value is None:
+                raise ValueError("flood_tx field missing")
+            value = int(value)
+            if value < 0:
+                raise ValueError("negative flood_tx counter")
+            self.counter_capability, self.counter_error = "available", ""
+            return value
+        except Exception as exc:
+            if self.counter_capability != "unsupported":
+                self.counter_capability = "unavailable"
+            self.counter_error = str(exc) or type(exc).__name__
+            return None
+
+    async def refresh_confirmation(self, result, timeout):
+        if result.confirmed or result.counter_before is None or result.counter_reset or not self.connected:
+            return
+        after = await self._bounded_counter(timeout)
+        result.counter_after = after
+        if after is not None and after < result.counter_before:
+            result.counter_reset = True
+            return
+        if after is not None and after > result.counter_before:
+            if not result.confirmed:
+                result.outcome = "local_confirmed"
+                result.detail = "Local transmission confirmed after initial wait"
+            for callback in tuple(result.listeners):
+                callback(result)
+
+    def transmission_diagnostics(self):
+        self.repeat_tracker.prune()
+        return {"counter_capability": self.counter_capability, "counter_error": self.counter_error,
+                "counter_checked_at": self.counter_checked_at, "repeat_status": self.repeat_status,
+                "repeat_subscription_active": bool(self._subscriptions) and self.connected,
+                "last_rx_event_at": self.repeat_tracker.last_event_at,
+                "tracked_packets": len(self.repeat_tracker.pending),
+                "policy": vars(self.policy),
+                "last_result": self.last_result.as_record() if self.last_result is not None else None}
+
     async def close(self) -> None:
+        for subscription in self._subscriptions:
+            subscription.unsubscribe()
+        self._subscriptions.clear()
+        self.repeat_status = "not connected"
         self._sender_name = None
         if self._mc is not None:
             mc, self._mc = self._mc, None
@@ -473,6 +633,8 @@ class QueueItem:
     notice_id: object = None
     valid_if: object = None
     queued_at: float = field(default_factory=time.time)
+    policy: TransmissionPolicy | None = None
+    delivery_context: tuple | None = None
 
 
 @dataclass
@@ -486,6 +648,9 @@ class QueuedNotice:
     notice_id: object = field(default_factory=object)
     verification: bool = False
     queued_at: float = field(default_factory=time.time)
+
+    policy: TransmissionPolicy | None = None
+    delivery_context: object = None
 
     @property
     def text(self):
@@ -501,7 +666,12 @@ class QueuedNotice:
         result_callback = self.callback
         callback = (lambda ok, err="": result_callback(index, ok, err)) if result_callback else None
         self.index += 1
-        return QueueItem(text, delay, callback, False, self.priority, self.notice_id, self.valid_if)
+        context = None
+        if self.delivery_context:
+            row_id, indices, total = self.delivery_context
+            context = (row_id, indices[index], total)
+        return QueueItem(text, delay, callback, False, self.priority, self.notice_id, self.valid_if,
+                         policy=self.policy, delivery_context=context)
 
 
 def _build_transports(db) -> dict:
@@ -530,9 +700,12 @@ class TransmitManager:
     """Serializes node access, paces bursts, fans out to all enabled transports."""
 
     supports_notice_guards = True
+    supports_delivery_context = True
 
     def __init__(self, db):
         self._db = db
+        self._repeat_tracker = RepeatTracker()
+        self._restore_repeat_tracking()
         self._transports = _build_transports(db)
         self._queue: deque[QueueItem | QueuedNotice] = deque(maxlen=QUEUE_MAX + 1)
         self._queue_event = asyncio.Event()
@@ -543,6 +716,29 @@ class TransmitManager:
         self._connection_task: asyncio.Task | None = None
         self._reconnect_delay = 2.0
         self._stopped = False
+
+    def _restore_repeat_tracking(self):
+        fetch = getattr(self._db, "tracking_transmissions", None)
+        if fetch is None:
+            return
+        for row in fetch():
+            try:
+                evidence = json.loads(row["evidence"] or "{}")
+                digest = evidence.get("packet_id", "")
+                window = evidence.get("policy", {}).get("late_repeat_seconds", 60)
+                remaining = evidence.get("repeat_expires_at") or evidence.get("started_at", 0) + window
+                remaining -= time.time()
+                if not digest or remaining <= 0:
+                    continue
+                fields = {key: value for key, value in evidence.items()
+                          if key in TxResult.__dataclass_fields__ and key not in ("listeners", "repeat_event")}
+                result = TxResult(**fields)
+                result.outcome, result.submitted, result.log_id = row["outcome"], True, row["id"]
+                result.retry_pending = False
+                result.listeners.append(self._db.finish_transmission)
+                self._repeat_tracker.register_digest(digest, result, remaining)
+            except (TypeError, ValueError, KeyError):
+                logger.warning("Could not restore repeat tracking for transmission %s", row["id"])
 
     # ---- lifecycle ------------------------------------------------------
     def start(self) -> None:
@@ -631,7 +827,9 @@ class TransmitManager:
         return [
             {"name": t.name, "label": t.label, "enabled": t.enabled,
              "conn": t.conn, "connected": t.connected and t.tx is not None and t.tx.connected,
-             "target": t.target, "channel": t.channel, "error": t.error}
+             "target": t.target, "channel": t.channel, "error": t.error,
+             "transmission": t.tx.transmission_diagnostics() if hasattr(t.tx, "transmission_diagnostics") else {},
+             "policy": vars(TransmissionPolicy.from_settings(self._db.all_settings())) if hasattr(self._db, "all_settings") else vars(TransmissionPolicy())}
             for t in self._transports.values()
         ]
 
@@ -724,6 +922,9 @@ class TransmitManager:
         logging so callers (startup vs. reconnect) can decide how to report."""
         try:
             tx = t.make()
+            if isinstance(tx, MeshCoreTransmitter):
+                tx.policy = self._policy()
+                tx.repeat_tracker = self._repeat_tracker
             await tx.connect()
             t.tx, t.connected, t.error = tx, True, ""
             return ""
@@ -749,12 +950,12 @@ class TransmitManager:
         if self._verification_in_flight or not allow_new or len(self._queue) >= QUEUE_MAX + 1:
             return False
         self._queue.append(QueueItem(text=text, delay_after=BURST_GAP_SECONDS,
-                                     on_result=on_result, verification=True))
+                                     on_result=on_result, verification=True, policy=self._policy()))
         self._queue_event.set()
         return True
 
     def enqueue_notice(self, parts: list[tuple[str, float]], on_result=None,
-                       priority: int = 3, valid_if=None) -> bool:
+                       priority: int = 3, valid_if=None, delivery_context=None) -> bool:
         """Admit every part of one notice together, or defer the whole notice.
 
         A verification message may occupy the single reserved slot. Each pending
@@ -770,8 +971,12 @@ class TransmitManager:
         pending = next((item for item in self._queue if item.verification), None)
         if pending is not None:
             self._queue.remove(pending)
+        policy = self._policy()
+        if delivery_context and hasattr(self._db, "delivery_policy"):
+            policy = self._db.delivery_policy(delivery_context, policy)
         notice = QueuedNotice(tuple((text, max(0.0, float(delay))) for text, delay in parts),
-                              on_result, priority, valid_if)
+                              on_result, priority, valid_if,
+                              policy=policy, delivery_context=delivery_context)
         waiting = list(self._queue)
         protected = 0
         while (protected < len(waiting) and self._active_notice is not None
@@ -807,7 +1012,7 @@ class TransmitManager:
             while notice.index < len(notice.parts):
                 part = notice.next_part()
                 if part.on_result is not None:
-                    self._safe_result(part.on_result, False, "Not attempted after notice stopped: " + error)
+                    self._safe_result(part.on_result, TxResult("not_attempted", error), "Not attempted after notice stopped: " + error)
 
     def enqueue(self, text: str, channel: int | None = None, on_result=None,
                 delay_after: float = BURST_GAP_SECONDS) -> bool:
@@ -856,54 +1061,142 @@ class TransmitManager:
         self._db.add_error(t.name, "link reset failed: %s" % last)
         return False
 
-    async def _try_send(self, t: Transport, text: str, ch: int) -> tuple[bool, str]:
-        """Send and confirm the radio actually transmitted. On failure, read WHY
-        (TxUnsent.category) and apply the matching correction before retrying:
-        wait out an airtime/queue limit, reconnect a dead link, or stop early on a
-        content/config error that a retry cannot fix. Returns (ok, error)."""
-        last = "not connected"
-        for attempt in (1, 2, 3):
+    def _policy(self):
+        settings = self._db.all_settings() if hasattr(self._db, "all_settings") else {}
+        return TransmissionPolicy.from_settings(settings)
+
+    async def _try_send(self, t, text, ch, policy=None, context=None, manual=False, valid_if=None):
+        """Return evidence, not a boolean; never blindly repeat an ambiguous send."""
+        policy = policy or self._policy()
+        last = TxResult("rejected", "not connected before submission")
+        uncertain = None
+        retry_used = bool(getattr(self._db, "uncertainty_retry_used", lambda _: False)(context))
+        rejection_attempts = 0
+        total_attempts = 0
+        while rejection_attempts < 3:
+            if valid_if is not None and not valid_if():
+                return (uncertain or TxResult("not_attempted", "Notice no longer current, selected or live")), "Notice no longer current, selected or live"
             if t.tx is None or not t.connected or not t.tx.connected:
                 t.connected = False
                 restored = await self._reconnect(t) if t.tx is not None else await self._ensure(t)
                 if not restored:
-                    last = t.error or "not connected"
-                    await asyncio.sleep(1)
+                    rejection_attempts += 1
+                    last = uncertain or TxResult("rejected", t.error or "not connected before submission")
                     continue
+            log_id = None
+            submission_result = None
+            def submitted(result):
+                nonlocal log_id, submission_result
+                if uncertain is not None and uncertain.confirmed:
+                    raise TxUnsent("already_confirmed", "Previous attempt confirmed before retry submission")
+                if valid_if is not None and not valid_if():
+                    raise TxUnsent("stale", "Notice no longer current, selected or live before submission")
+                submission_result = result
+                result.attempt = total_attempts
+                begin = getattr(self._db, "begin_transmission", None)
+                if begin:
+                    log_id = begin(ch, text, t.name, manual, context, retry=uncertain is not None,
+                                   policy=policy, evidence=result.as_record())
+                    result.log_id = log_id
+                    result.listeners.append(self._db.finish_transmission)
+                if result.timestamp is not None and hasattr(self._db, "set_setting"):
+                    self._db.set_setting("meshcore_last_tx_timestamp", result.timestamp)
+            total_attempts += 1
+            if isinstance(t.tx, MeshCoreTransmitter):
+                t.tx.policy = policy
+                t.tx.on_submission = submitted
+                t.tx._last_timestamp = max(t.tx._last_timestamp, int(self._db.get_setting("meshcore_last_tx_timestamp", 0) or 0))
+                if policy.repeat_detection and not t.tx._subscriptions:
+                    t.tx._subscribe_repeats()
+            else:
+                submitted(TxResult("submitting", submitted=True))
             try:
-                await t.tx.send_text(text, ch)
-                if attempt > 1:
-                    self._db.add_event(
-                        "INFO", "%s sent on attempt %d (%s)" % (t.label, attempt, last))
-                return True, ""
+                result = await t.tx.send_text(text, ch)
+                last = result if isinstance(result, TxResult) else TxResult("local_confirmed", submitted=True, accepted=True)
             except TxUnsent as exc:
-                last = exc.detail
-                t.error = last
-                cat = exc.category
-                logger.warning("%s not sent (attempt %d/3): %s [%s]",
-                               t.name, attempt, exc.detail, cat)
-                if cat in ("too_large", "no_channel", "unverified"):
-                    break  # a retry cannot fix bad content/config; fail fast with the reason
-                if cat == "duty_cycle":
-                    await asyncio.sleep(6)          # airtime cap: let the radio cool down
-                elif cat == "queue_full":
-                    await asyncio.sleep(3)          # let the TX queue drain
-                elif cat == "link":
-                    await self._reconnect(t)        # interface down / no reply: reopen it
-                else:                               # "unsent": brief wait, then reconnect
-                    await asyncio.sleep(2)
-                    if attempt >= 2:
-                        await self._reconnect(t)
+                if exc.category == "already_confirmed":
+                    return uncertain, uncertain.detail
+                last = TxResult("unconfirmed" if exc.category == "unverified" else "not_attempted" if exc.category == "stale" else "rejected", exc.detail,
+                                submitted=exc.category == "unverified")
+                if exc.category in ("too_large", "no_channel", "stale"):
+                    rejection_attempts = 3
             except Exception as exc:
-                # Unexpected link error (Broken pipe, serial hiccup): reconnect + retry.
-                last = "send failed: %s" % exc
-                t.error = last
-                logger.warning("%s send error (attempt %d/3): %s", t.name, attempt, exc)
-                await self._reconnect(t)
-        self._db.add_error(t.name, last)   # a real failure only after all corrections tried
-        return False, last
+                # Once submission starts, a broken response is not proof of no send.
+                last = submission_result if submission_result is not None else TxResult("unconfirmed", submitted=True)
+                if last.submitted:
+                    last.outcome = "unconfirmed"
+                    last.detail = "command interrupted; message may have transmitted: %s" % (str(exc) or type(exc).__name__)
+                else:
+                    last.outcome = "not_attempted"
+                    last.detail = "Submission preparation failed before sending: %s" % (str(exc) or type(exc).__name__)
+            finally:
+                if isinstance(t.tx, MeshCoreTransmitter):
+                    t.tx.on_submission = None
+            last.attempt = total_attempts
+            if log_id is not None:
+                last.log_id = log_id
+            if log_id is not None:
+                self._db.finish_transmission(last)
+            if uncertain is not None and uncertain.confirmed:
+                return uncertain, uncertain.detail
+            if last.confirmed:
+                t.error = ""
+                return last, last.detail
+            if last.outcome == "unconfirmed":
+                uncertain = last
+                t.error = ""  # uncertainty is shown as evidence, not a broken connection
+                logger.warning("%s transmission unconfirmed (attempt %d): %s", t.name, total_attempts, last.detail)
+                if not policy.retry_unconfirmed or retry_used:
+                    return last, last.detail
+                # Reserve before sleeping. A restart must not reset the retry budget.
+                retry_used = True
+                last.retry_pending = True
+                if last.log_id is not None:
+                    self._db.finish_transmission(last)
+                reserve = getattr(self._db, "reserve_uncertainty_retry", None)
+                if reserve:
+                    reserve(context)
+                deadline = time.monotonic() + policy.retry_delay_seconds
+                while not last.confirmed and time.monotonic() < deadline:
+                    if isinstance(t.tx, MeshCoreTransmitter) and last.counter_before is not None:
+                        await t.tx.refresh_confirmation(last, min(0.75, max(0.001, deadline - time.monotonic())))
+                    remaining = deadline - time.monotonic()
+                    if last.confirmed or remaining <= 0:
+                        break
+                    try:
+                        await asyncio.wait_for(last.repeat_event.wait(), min(0.3, remaining))
+                    except asyncio.TimeoutError:
+                        pass
+                last.retry_pending = False
+                if last.log_id is not None:
+                    self._db.finish_transmission(last)
+                # One final bounded read closes the race at the end of the retry delay.
+                if isinstance(t.tx, MeshCoreTransmitter) and not last.confirmed:
+                    await t.tx.refresh_confirmation(last, 0.75)
+                if last.confirmed:
+                    return last, last.detail
+                if valid_if is not None and not valid_if():
+                    return last, last.detail
+                continue
+            if last.outcome == "not_attempted":
+                return uncertain or last, last.detail
+            # An earlier ambiguous attempt may have succeeded, even if its retry is rejected.
+            if uncertain is not None:
+                return uncertain, uncertain.detail
+            rejection_attempts += 1
+            if last.rejection_category in ("no_channel", "unsupported", "invalid"):
+                rejection_attempts = 3
+            t.error = last.detail
+            logger.warning("%s rejected (attempt %d): %s", t.name, total_attempts, last.detail)
+            if rejection_attempts < 3:
+                await asyncio.sleep(6 if "duty" in last.detail.lower() else 3 if "queue" in last.detail.lower() else 2)
+                if rejection_attempts >= 2:
+                    await self._reconnect(t)
+        if not last:
+            self._db.add_error(t.name, last.detail)
+        return last, last.detail
 
-    async def _send_all(self, text: str, manual: bool, on_test: bool | None = None) -> bool:
+    async def _send_all(self, text: str, manual: bool, on_test: bool | None = None) -> TxResult | bool:
         any_ok = False
         blen = len(text.encode())
         # `on_test` picks the channel (test vs live); `manual` only tags the log
@@ -911,28 +1204,25 @@ class TransmitManager:
         # each radio's LIVE channel; only the Troubleshoot test uses the test channel.
         use_test = manual if on_test is None else on_test
         async with self._lock:
-            # Each enabled radio gets ONE send that is VERIFIED to have gone out
-            # (the send path retries internally on failure/no-transmit). No blind
-            # repeats: a message is logged "sent" only when the radio confirmed it
-            # actually keyed up, otherwise "failed" so the miss is visible.
+            # Manual, test and queued sends share evidence and bounded retry rules.
             for t in self._transports.values():
                 if not t.enabled:
                     continue
                 ch = t.test_channel if use_test else t.channel
-                ok, err = await self._try_send(t, text, ch)
+                ok, err = await self._try_send(t, text, ch, manual=manual)
                 self._db.add_transmit_log(ch, blen, ok, text, manual,
-                                          error=("" if ok else err), transport=t.name)
+                                          error=err, transport=t.name)
                 if ok:
-                    any_ok = True
-                    logger.info("transmitted via %s on ch %d (verified)", t.name, ch)
+                    any_ok = ok
+                    logger.info("transmission via %s on ch %d: %s", t.name, ch, getattr(ok, "outcome", "local_confirmed"))
         return any_ok
 
-    async def send_manual(self, text: str) -> bool:
+    async def send_manual(self, text: str) -> TxResult | bool:
         # A composed manual broadcast is a real message for people, so it goes on
         # each radio's LIVE channel (logged as a manual action).
         return await self._send_all(text, manual=True, on_test=False)
 
-    async def send_test(self, text: str) -> bool:
+    async def send_test(self, text: str) -> TxResult | bool:
         # The Troubleshoot canned test goes on each radio's TEST channel.
         return await self._send_all(text, manual=True, on_test=True)
 
@@ -988,12 +1278,12 @@ class TransmitManager:
             if not t.enabled:
                 return False, "%s is disabled" % t.label
             ch = t.test_channel   # tests go on this radio's test channel
-            ok, err = await self._try_send(t, text, ch)
+            ok, err = await self._try_send(t, text, ch, manual=True)
             self._db.add_transmit_log(ch, blen, ok, text, True,
-                                      error=("" if ok else err), transport=t.name)
+                                      error=err, transport=t.name)
             if ok:
                 logger.info("test transmitted via %s on ch %d", t.name, ch)
-            return ok, ("" if ok else err)
+            return ok, err
 
     async def resend(self, name: str, text: str, channel: int) -> tuple[bool, str]:
         """Re-transmit an exact message on a specific radio and channel, logging a
@@ -1005,33 +1295,37 @@ class TransmitManager:
                 return False, "unknown radio"
             if not t.enabled:
                 return False, "%s is disabled" % t.label
-            ok, err = await self._try_send(t, text, channel)
+            ok, err = await self._try_send(t, text, channel, manual=True)
             self._db.add_transmit_log(channel, blen, ok, text, True,
-                                      error=("" if ok else err), transport=t.name)
+                                      error=err, transport=t.name)
             if ok:
                 logger.info("resent via %s on ch %d", t.name, channel)
-            return ok, ("" if ok else err)
+            return ok, err
 
     async def _transmit_item(self, item: QueueItem) -> tuple[bool, str]:
-        """Send one queued BOM warning on the live channel."""
+        """Send one queued notice part on the live channel."""
         blen = len(item.text.encode())
-        any_ok, last = False, ""
+        any_ok, last, last_result = False, "", None
         async with self._lock:
             if self._db.get_setting("dry_run", True):
-                return False, "Dry Run enabled before queued transmission"
+                return TxResult("not_attempted", "Dry Run enabled before queued transmission"), "Dry Run enabled before queued transmission"
             if item.valid_if is not None and not item.valid_if():
-                return False, "Notice no longer current or selected before queued transmission"
+                return TxResult("not_attempted", "Notice no longer current or selected before queued transmission"), "Notice no longer current or selected before queued transmission"
             for t in self._transports.values():
                 if not t.enabled:
                     continue
                 ch = t.channel
-                ok, err = await self._try_send(t, item.text, ch)
+                guard = lambda: (not self._db.get_setting("dry_run", True)
+                                 and (item.valid_if is None or item.valid_if()))
+                ok, err = await self._try_send(t, item.text, ch, policy=item.policy,
+                                               context=item.delivery_context, valid_if=guard)
                 self._db.add_transmit_log(ch, blen, ok, item.text, False,
-                                          error=("" if ok else err), transport=t.name)
-                any_ok = any_ok or ok
-                if not ok:
-                    last = err
-        return any_ok, ("" if any_ok else last)
+                                          error=err, transport=t.name)
+                if ok:
+                    any_ok = ok
+                else:
+                    last, last_result = err, ok
+        return (any_ok if any_ok else last_result if last_result is not None else TxResult("not_attempted", last or "No enabled transport")), (any_ok.detail if isinstance(any_ok, TxResult) else last)
 
     async def _worker(self) -> None:
         while not self._stopped:

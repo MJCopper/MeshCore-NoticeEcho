@@ -10,7 +10,7 @@ The dashboard distinguishes current saved notices from lifetime History totals, 
 
 **Re-process current notices** applies the current matching/filtering policy to stored provider inputs, preserving ordinary duplicate suppression and first-live baseline rules. It does not refresh provider observation age, advance disappearance counters or complete a feed baseline. Legacy rows without provider inputs require a successful poll first.
 
-**Resend eligible current notices** intentionally bypasses completed-delivery suppression and the Traffic first-live baseline for the selected current notices. It preserves source enablement, selection, lifecycle/expiry, fire suppression, dry-run and pre-send guards. Notices already queued are not admitted again. Resending a previously sent notice starts a new complete delivery; ordinary retry recovery continues to preserve confirmed parts.
+**Resend eligible current notices** intentionally bypasses completed-delivery suppression and the Traffic first-live baseline for the selected current notices. It preserves source enablement, selection, lifecycle/expiry, fire suppression, dry-run and pre-send guards. Notices already queued are not admitted again. Resending a previously sent notice starts a new complete delivery; ordinary recovery preserves both confirmed and potentially delivered parts.
 
 Choose one service or all, then preview. The preview lists eligible notices, estimated message parts, exclusions, source content and dry-run/live mode. Re-processing can leave already delivered notices unchanged. Preview runs on an isolated database and cannot send to a radio or modify production dedupe/settings/history. Tokens expire after five minutes, are single-use, and become invalid if settings, saved notices or delivery state changes.
 
@@ -48,3 +48,13 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 ```
 
 This stores test settings and history in the external Docker volume `wxecho-test-data`. Creating the volume again is safe and retains its contents. Use both Compose files for subsequent commands. It does not copy an existing `data/wx-echo.db`; back up and migrate that database before switching if it contains settings or history you need. Compose preserves this external volume, including with `down -v`; removing it explicitly with `docker volume rm` deletes the test database.
+
+## Transmission confirmation
+
+“Local TX counter unavailable” means the statistics check failed; it does not establish that the message was not sent. The queue continues the remaining parts. A matching heard repeat confirms propagation even without readable counters. Inspect **Delivery and radios** for counter support/error, repeat subscription status, tracked packets, policy, pending retries and recent unconfirmed submissions. Expand a Transmit Log or History record for individual part evidence. Repeated capability failures do not create duplicate service error records.
+
+To reduce duplicate reception, leave **Retry unconfirmed transmissions once** off unless the network needs that recovery trade-off. When enabled, a late repeat or recovered local counter cancels the pending retry. No repeat can also mean that a receiver heard the original transmission directly.
+
+### Physical companion checks
+
+Automated tests simulate SDK responses and exercise the SDK packet parser; they cannot measure your radio or local network. On the test environment, verify a controlled multipart notice with retry disabled: both parts should arrive even if statistics are unavailable. Check that heard repeats change the correct part to **Repeat confirmed**. Repeat with the optional retry enabled and verify at most one duplicate of an unconfirmed part, ordered before the next part. Confirm that late repeats suppress retries and that reconnecting does not lose tracking. Choose timeout/delay values using the observed timings in the Transmit Log.

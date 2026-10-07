@@ -1,7 +1,7 @@
 {% for r in rows %}
 <div class="rec">
   <div class="rec-head">
-    <span class="rec-time">{{ r.ts | localtime(tz) }}{% if r.transmitted_at %} · locally transmitted {{ r.transmitted_at | localtime(tz) }}{% endif %}</span>
+    <span class="rec-time">{{ r.ts | localtime(tz) }}{% if r.transmitted_at %} · confirmed {{ r.transmitted_at | localtime(tz) }}{% endif %}</span>
     <span>
       <span class="pill radio">{{ r.source_label }}</span>
       {% if r.id in superseded_ids %}<span class="pill">Earlier revision</span>{% endif %}
@@ -17,7 +17,8 @@
       {% else %}<div class="rec-msg none">No message prepared</div>{% endif %}
     </div>
     {% if r.detail %}<div class="rec-detail">{{ r.detail }}</div>{% endif %}
-    {% if r.delivery_parts %}<div class="rec-detail">Parts: {% for part in r.delivery_parts %}{{ loop.index }}/{{ r.delivery_parts|length }} {{ part.status }}{% if part.error %} ({{ part.error }}){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
+    {% if r.delivery_parts %}<details class="rec-detail"><summary>Part outcomes</summary>
+    {% for part in r.delivery_parts %}<p>{{ loop.index }}/{{ r.delivery_parts|length }} {{ {'transmitted':'Locally confirmed (legacy)','local_confirmed':'Locally confirmed','repeat_confirmed':'Repeat confirmed','unconfirmed':'Unconfirmed','not_attempted':'Not attempted'}.get(part.status, part.status) }}{% if part.attempts %} · {{ part.attempts }} attempt(s){% endif %}{% if part.repeats %} · {{ part.repeats }} repeat observation(s){% endif %}{% if part.elapsed_seconds is defined %} · {{ '%.2f'|format(part.elapsed_seconds) }} seconds{% endif %}{% if part.error %}<br>{{ part.error }}{% endif %}{% if part.counter_before is defined %}<br>Local counter: {{ part.counter_before }} → {{ part.counter_after }}{% endif %}</p>{% endfor %}</details>{% endif %}
   </div>
   {% if r.source == 'bom' and r.metadata.region %}
   <div class="rec-areawrap"><div class="rec-lbl">Council decision</div>

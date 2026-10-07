@@ -327,7 +327,7 @@ class BomPoller:
         if (decision.transmit and latest is not None
                 and latest["revision_hash"] == revision_hash
                 and (latest["transmit_status"] == "queued" or
-                     (not force and not dry_run and latest["transmit_status"] == "success"))):
+                     (not force and not dry_run and latest["transmit_status"] in ("success", "unconfirmed", "repeat_confirmed")))):
             return False
         retry_existing = ((not force or (latest is not None and latest["transmit_status"] == "deferred")) and decision.transmit and not dry_run and latest is not None
                           and latest["revision_hash"] == revision_hash
@@ -436,7 +436,7 @@ class BomPoller:
             return match_geography(alert, match, current, enrichment).included
 
         if not submit_notice(self._tx, [parts[i] for i in indices], _on_result, priority=1,
-                             valid_if=valid_if):
+                             valid_if=valid_if, delivery_context=(history_id, tuple(indices), len(parts))):
             status, reason = queue_refusal(parts)
             self._db.update_history_transmit_status(history_id, status, reason)
             if status == "failed":
@@ -482,7 +482,7 @@ class BomPoller:
                 saved = self._db.get_setting(key, {}) or {}
                 saved[str(channel)] = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self._db.set_setting(key, saved)
-                self._db.add_event("INFO", "verification message delivered")
+                self._db.add_event("INFO", "Verification transmission: %s" % getattr(ok, "label", "Locally confirmed"))
             else:
                 self._db.add_error("broadcast", f"verification message failed: {err}")
                 self._db.add_event("WARN", f"verification message failed: {err}")

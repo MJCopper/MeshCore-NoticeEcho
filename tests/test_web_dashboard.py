@@ -161,14 +161,14 @@ def test_dashboard_and_history_render_populated_data():
 
     assert dashboard.status_code == 200
     assert "Recent Notices" in dashboard.text
-    assert "Locally transmitted by this radio" in dashboard.text
+    assert "Transmission evidence is shown for each notice" in dashboard.text
     assert "NSW RFS" in dashboard.text
     assert "Live Traffic NSW" in dashboard.text
     assert "/dev/serial/by-id/usb-Seeed_XIAO-if00" in dashboard.text
-    assert "transmitted" in dashboard.text
+    assert "Completed — locally confirmed" in dashboard.text
     assert history.status_code == 200
     assert "Severe Weather Warning" in history.text
-    assert "transmitted" in history.text
+    assert "Completed — locally confirmed" in history.text
 
 
 def test_disabled_bom_does_not_raise_missing_feed_health_warning():

@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import json
 
+from .transmission import COMPLETED
+
 from .config import BURST_GAP_SECONDS, MULTIPART_GAP_SECONDS, QUEUE_MAX
 
 
-def submit_notice(tx, parts: list[str], on_result, priority: int = 3, valid_if=None) -> bool:
+def submit_notice(tx, parts: list[str], on_result, priority: int = 3, valid_if=None, delivery_context=None) -> bool:
     """Queue an entire notice in order. A full live queue defers every part."""
     entries = [(part, MULTIPART_GAP_SECONDS if index < len(parts) - 1 else BURST_GAP_SECONDS)
                for index, part in enumerate(parts)]
     batch = getattr(tx, "enqueue_notice", None)
     if batch is not None:
+        if getattr(tx, "supports_delivery_context", False):
+            return batch(entries, on_result=on_result, priority=priority, valid_if=valid_if,
+                         delivery_context=delivery_context)
         if getattr(tx, "supports_notice_guards", False):
             return batch(entries, on_result=on_result, priority=priority, valid_if=valid_if)
         return batch(entries, on_result=on_result, priority=priority)
@@ -32,7 +37,7 @@ def record_part(db, row_id: int, index: int, total: int, ok: bool, error: str = 
 
 
 def remaining_parts(row, text: str, parts: list[str]) -> list[int]:
-    """Skip parts already confirmed locally on a retry of identical text."""
+    """Skip confirmed or potentially delivered parts on an ordinary recovery poll."""
     if row is None or row["transmitted_text"] != text:
         return list(range(len(parts)))
     try:
@@ -43,7 +48,7 @@ def remaining_parts(row, text: str, parts: list[str]) -> list[int]:
     if len(outcomes) != len(parts):
         return list(range(len(parts)))
     return [index for index, outcome in enumerate(outcomes)
-            if outcome.get("status") != "transmitted"]
+            if outcome.get("status") not in COMPLETED]
 
 
 def queue_refusal(parts: list[str]) -> tuple[str, str]:

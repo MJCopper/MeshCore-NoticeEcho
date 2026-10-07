@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 import datetime
 
-from fastapi import APIRouter, Form, Request, Query
+from fastapi import APIRouter, Form, Request, Query, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -34,6 +34,14 @@ from ..history import history_sources, get_history_source, history_source_label
 TEMPLATES.env.filters["localtime"] = fmt_local
 TEMPLATES.env.filters["epochlocal"] = fmt_epoch
 
+def _evidence(value):
+    try:
+        return json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+TEMPLATES.env.filters["transmission_evidence"] = _evidence
+
 
 # History/dashboard status labels describe the FILTER decision, not transmission
 # (whether a message actually went out lives in the Transmit Log). So "sent"
@@ -59,8 +67,10 @@ DISP_LABELS = {
 TX_STATUS_LABELS = {
     "queued": "queued",
     "deferred": "waiting for send queue",
-    "success": "locally transmitted",
-    "failed": "failed",
+    "success": "Completed — locally confirmed",
+    "repeat_confirmed": "Completed — repeat confirmed",
+    "unconfirmed": "Completed — some parts unconfirmed",
+    "failed": "Incomplete — failed",
     "dry-run": "dry-run",
     "interrupted": "interrupted",
 }
@@ -146,7 +156,7 @@ def _dash_ctx(request) -> dict:
     else:
         rows = (db.query_service_history(limit=1000) if hasattr(db, "query_service_history")
                 else db.query_history(limit=1000))
-        sent = [r for r in rows if r["transmit_status"] == "success"]
+        sent = [r for r in rows if r["transmit_status"] in ("success", "repeat_confirmed")]
         sent_7d = sum(1 for r in sent if _age(r["ts"]) < 7)
         sent_today = sum(1 for r in sent if _age(r["ts"]) < 1)
         buckets = [0] * 7
@@ -157,12 +167,12 @@ def _dash_ctx(request) -> dict:
     spark_line, spark_fill = _spark(buckets)
     recent_rows = []
     seen_items = set()
-    candidates = (db.query_service_history(transmit_status="success", limit=2000)
+    candidates = (db.query_service_history(transmit_status="completed", limit=2000)
                   if hasattr(db, "query_service_history") else db.query_history(limit=200))
     for r in sorted(candidates, key=lambda row: (row.get("transmitted_at") or row["ts"],
                                                  row["id"] if "id" in row.keys() else 0),
                     reverse=True):
-        if r["transmit_status"] != "success":
+        if r["transmit_status"] not in ("success", "repeat_confirmed", "unconfirmed"):
             continue
         source = r["source"] if "source" in r.keys() else "bom"
         external_id = r["external_id"] if "external_id" in r.keys() else r.get("alert_id", "")
@@ -187,7 +197,9 @@ def _dash_ctx(request) -> dict:
     if ltx:
         # ASCII only: this string is auto-escaped through {{ }}, so a non-ASCII
         # separator could mojibake depending on charset. Keep it plain.
-        last_tx = ("OK - " if ltx[0]["success"] else "failed - ") + fmt_local(ltx[0]["ts"], tz)
+        outcome = ltx[0]["outcome"] if "outcome" in ltx[0].keys() else ("local_confirmed" if ltx[0]["success"] else "rejected")
+        from ..transmission import LABELS
+        last_tx = LABELS.get(outcome, outcome) + " - " + fmt_local(ltx[0]["ts"], tz)
 
     # Each enabled source has its own feed health and interval.
     st = poller.status
@@ -368,7 +380,7 @@ def _history_context(request, source="", disposition="", transmit_status="",
                 date_from=date_from, date_to=date_to, facet=facet,
                 records="all" if records == "all" else "prepared",
                 dispositions=["sent", "filtered", "update", "cancelled"],
-                transmit_statuses=["queued", "deferred", "success", "failed", "interrupted", "dry-run"])
+                transmit_statuses=["queued", "deferred", "success", "repeat_confirmed", "unconfirmed", "failed", "interrupted", "dry-run"])
 
 
 @router.get("/history", response_class=HTMLResponse)
@@ -567,7 +579,20 @@ async def meshcore_connection_page(request: Request):
 async def save_meshcore_connection(request: Request, meshcore_conn: str = Form("serial"),
                                    meshcore_port: str = Form(""), meshcore_host: str = Form(""),
                                    meshcore_channel: int = Form(0),
-                                   meshcore_test_channel: int = Form(1)):
+                                   meshcore_test_channel: int = Form(1),
+                                   meshcore_repeat_detection: str = Form(""),
+                                   meshcore_confirmation_seconds: float = Form(5.0),
+                                   meshcore_retry_unconfirmed: str = Form(""),
+                                   meshcore_retry_delay_seconds: float = Form(5.0),
+                                   meshcore_late_repeat_seconds: float = Form(60.0)):
+    import math
+    for label, value, low, high in (
+        ("Confirmation wait", meshcore_confirmation_seconds, 1, 30),
+        ("Retry delay", meshcore_retry_delay_seconds, 1, 30),
+        ("Late repeat tracking", meshcore_late_repeat_seconds, 10, 300),
+    ):
+        if not math.isfinite(value) or not low <= value <= high:
+            raise HTTPException(422, f"{label} must be between {low} and {high} seconds")
     db = _db(request)
     db.set_setting("meshcore_enabled", True)
     db.set_setting("meshcore_conn", meshcore_conn if meshcore_conn in ("serial", "tcp") else "serial")
@@ -575,8 +600,13 @@ async def save_meshcore_connection(request: Request, meshcore_conn: str = Form("
     db.set_setting("meshcore_host", meshcore_host.strip())
     db.set_setting("meshcore_channel", meshcore_channel)
     db.set_setting("meshcore_test_channel", meshcore_test_channel)
+    db.set_setting("meshcore_repeat_detection", bool(meshcore_repeat_detection))
+    db.set_setting("meshcore_confirmation_seconds", meshcore_confirmation_seconds)
+    db.set_setting("meshcore_retry_unconfirmed", bool(meshcore_retry_unconfirmed))
+    db.set_setting("meshcore_retry_delay_seconds", meshcore_retry_delay_seconds)
+    db.set_setting("meshcore_late_repeat_seconds", meshcore_late_repeat_seconds)
     await _tx(request).reconfigure()
-    db.add_event("INFO", "MeshCore connection saved")
+    db.add_event("INFO", "MeshCore connection and transmission policy saved")
     return RedirectResponse("/settings/meshcore", status_code=303)
 
 
@@ -844,7 +874,7 @@ async def manual_send(request: Request, text: str = Form(...)):
                       message=f"message exceeds MeshCore limit ({budget} bytes)",
                       text=text, bytes=len(text.encode("utf-8")))
     ok = await tx.send_manual(text)   # goes on each radio's LIVE channel
-    msg = "sent" if ok else f"failed: {tx.last_error}"
+    msg = getattr(ok, "label", "Locally confirmed") if ok else f"failed: {tx.last_error}"
     return render(request, "_manual_result.html", ok=ok, message=msg,
                   text=text, bytes=len(text.encode()))
 
@@ -878,7 +908,7 @@ async def send_test(request: Request):
     ok = await tx.send_test(text)   # goes on each radio's TEST channel
     return render(
         request, "_manual_result.html", ok=ok,
-        message=("test sent to all radios" if ok else f"failed: {tx.last_error}"),
+        message=(getattr(ok, "label", "Locally confirmed") if ok else f"failed: {tx.last_error}"),
         text=text, bytes=len(text.encode()),
     )
 
@@ -891,7 +921,7 @@ async def send_test_one(request: Request, name: str):
     ok, err = await tx.send_to(name, text)
     return render(
         request, "_manual_result.html", ok=ok,
-        message=(f"test sent via {label}" if ok else f"{label} failed: {err}"),
+        message=(f"{label}: {getattr(ok, 'label', 'Locally confirmed')}" if ok else f"{label} failed: {err}"),
         text=text, bytes=len(text.encode()),
     )
 

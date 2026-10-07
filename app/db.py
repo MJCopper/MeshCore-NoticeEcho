@@ -6,6 +6,8 @@ are fast local operations, so running them synchronously is fine.
 """
 from __future__ import annotations
 
+from .transmission import TxResult, CONFIRMED, COMPLETED
+
 import json
 import sqlite3
 import threading
@@ -224,6 +226,20 @@ class Database:
             }
             if "transport" not in transmit_columns:
                 self._conn.execute("ALTER TABLE transmit_log ADD COLUMN transport TEXT")
+            for name, definition in (
+                ("outcome", "TEXT NOT NULL DEFAULT ''"),
+                ("evidence", "TEXT NOT NULL DEFAULT '{}'"),
+                ("service_history_id", "INTEGER"),
+                ("part_index", "INTEGER"),
+                ("part_total", "INTEGER"),
+                ("uncertainty_retry", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in transmit_columns:
+                    self._conn.execute(f"ALTER TABLE transmit_log ADD COLUMN {name} {definition}")
+            self._conn.execute("UPDATE transmit_log SET outcome = CASE WHEN success = 1 THEN 'local_confirmed' ELSE 'rejected' END WHERE outcome = ''")
+            self._conn.execute("UPDATE transmit_log SET outcome = 'unconfirmed', success = NULL WHERE outcome = 'rejected' AND error LIKE '%transmission cannot be confirmed%'")
+            self._conn.execute("UPDATE transmit_log SET outcome = 'unconfirmed', success = NULL, error = 'Application stopped during submission; message may have transmitted' WHERE outcome = 'submitting'")
+            self._conn.execute("UPDATE transmit_log SET evidence=json_set(evidence,'$.retry_pending',json('false')) WHERE json_extract(evidence,'$.retry_pending')=1")
             current_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(bom_current)")}
             for name, definition in (
                 ("council_match", "TEXT NOT NULL DEFAULT 'unknown'"),
@@ -264,6 +280,35 @@ class Database:
                 "UPDATE service_history SET transmit_status = 'interrupted', "
                 "detail = detail || '; interrupted before local transmission was confirmed' "
                 "WHERE transmit_status = 'queued'")
+            # Submission intent survives a crash. Preserve ambiguous parts, retry only untouched parts.
+            for row in self._conn.execute("SELECT id, delivery_parts, transmit_status FROM service_history WHERE transmit_status IN ('interrupted', 'failed')").fetchall():
+                try:
+                    parts = json.loads(row["delivery_parts"] or "[]")
+                except ValueError:
+                    parts = []
+                changed = False
+                if not parts:
+                    history = self._conn.execute("SELECT transmitted_text, detail FROM service_history WHERE id=?", (row["id"],)).fetchone()
+                    if "transmission cannot be confirmed" in (history["detail"] or ""):
+                        texts = history["transmitted_text"].split(" || ") if history["transmitted_text"] else []
+                        parts = [{"status": "unconfirmed" if self._conn.execute("SELECT 1 FROM transmit_log WHERE text=? AND outcome='unconfirmed' LIMIT 1", (text,)).fetchone() else "pending",
+                                  "error": "Legacy transmission confirmation unavailable"} for text in texts]
+                        changed = bool(parts)
+                for part in parts:
+                    if part.get("retry_pending"):
+                        part["retry_pending"] = False
+                        changed = True
+                    if part.get("status") == "failed" and part.get("error", "").startswith("Not attempted"):
+                        part["status"] = "not_attempted"
+                        changed = True
+                    if part.get("status") == "submitting" or (part.get("status") == "failed" and "transmission cannot be confirmed" in part.get("error", "")):
+                        part.update(status="unconfirmed", outcome="unconfirmed", error="Submission interrupted or confirmation unavailable; message may have transmitted")
+                        changed = True
+                if changed:
+                    self._conn.execute("UPDATE service_history SET delivery_parts = ? WHERE id = ?", (json.dumps(parts), row["id"]))
+                if parts and all(part.get("status") in COMPLETED for part in parts):
+                    status = "unconfirmed" if any(part.get("status") == "unconfirmed" for part in parts) else "repeat_confirmed" if all(part.get("status") == "repeat_confirmed" for part in parts) else "success"
+                    self._conn.execute("UPDATE service_history SET transmit_status = ?, transmitted_at = CASE WHEN ? IN ('success','repeat_confirmed') AND transmitted_at = '' THEN ts ELSE transmitted_at END WHERE id = ?", (status, status, row["id"]))
             # Retire only old BOM history with provenance proving another state.
             non_nsw_bom = (
                 "source = 'bom' AND ((json_extract(metadata, '$.region') IS NOT NULL "
@@ -535,7 +580,14 @@ class Database:
     def update_service_history(self, row_id: int, transmit_status: str,
                                detail: Optional[str] = None) -> None:
         with self._lock:
-            transmitted_at = _now() if transmit_status == "success" else None
+            if transmit_status == "success":
+                row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id = ?", (row_id,)).fetchone()
+                parts = json.loads(row["delivery_parts"] or "[]") if row else []
+                if any(part.get("status") == "unconfirmed" for part in parts):
+                    transmit_status = "unconfirmed"
+                elif parts and all(part.get("status") == "repeat_confirmed" for part in parts):
+                    transmit_status = "repeat_confirmed"
+            transmitted_at = _now() if transmit_status in ("success", "repeat_confirmed") else None
             if detail is None:
                 self._conn.execute(
                     "UPDATE service_history SET transmit_status = ?, "
@@ -565,7 +617,18 @@ class Database:
                 parts = []
             while len(parts) < total:
                 parts.append({"status": "pending"})
-            parts[index] = {"status": "transmitted" if ok else "failed", "error": error}
+            previous = parts[index]
+            if isinstance(ok, TxResult):
+                record = ok.as_record()
+                # A late repeat may have confirmed an earlier attempt already.
+                if previous.get("status") in CONFIRMED and (not ok.confirmed or previous.get("status") == "repeat_confirmed"):
+                    record["outcome"] = previous["status"]
+                if previous.get("may_have_transmitted") and record["outcome"] not in COMPLETED:
+                    record["outcome"] = "unconfirmed"
+                parts[index] = previous | record | {"status": record["outcome"], "error": error or ok.detail,
+                                                    "may_have_transmitted": previous.get("may_have_transmitted", False) or record["outcome"] in COMPLETED}
+            else:
+                parts[index] = previous | {"status": "transmitted" if ok else ("not_attempted" if error.startswith("Not attempted") else "failed"), "error": error}
             self._conn.execute(
                 "UPDATE service_history SET delivery_parts = ? WHERE id = ?",
                 (json.dumps(parts), row_id),
@@ -579,7 +642,7 @@ class Database:
             rows = self._conn.execute(
                 "SELECT CAST((? - strftime('%s', COALESCE(NULLIF(transmitted_at, ''), ts))) / 86400 AS INTEGER) AS age_days, "
                 "COUNT(*) AS total FROM service_history "
-                "WHERE transmit_status = 'success' AND COALESCE(NULLIF(transmitted_at, ''), ts) >= ? "
+                "WHERE transmit_status IN ('success', 'repeat_confirmed') AND COALESCE(NULLIF(transmitted_at, ''), ts) >= ? "
                 "GROUP BY age_days",
                 (int(now.timestamp()), cutoff),
             ).fetchall()
@@ -587,11 +650,11 @@ class Database:
                 if row["age_days"] is not None and 0 <= row["age_days"] < 7}
 
     def latest_successful_broadcast(self, source: str, external_id: str):
-        """Find the latest notice confirmed by the local radio for this item."""
+        """Find a completed submission eligible for a subsequent closure notice."""
         with self._lock:
             return self._conn.execute(
                 "SELECT * FROM service_history WHERE source = ? AND external_id = ? "
-                "AND transmit_status = 'success' ORDER BY id DESC LIMIT 1",
+                "AND transmit_status IN ('success', 'repeat_confirmed', 'unconfirmed') ORDER BY id DESC LIMIT 1",
                 (source, external_id),
             ).fetchone()
 
@@ -630,7 +693,9 @@ class Database:
         if disposition:
             clauses.append("disposition = ?")
             params.append(disposition)
-        if transmit_status:
+        if transmit_status == "completed":
+            clauses.append("transmit_status IN ('success','repeat_confirmed','unconfirmed')")
+        elif transmit_status:
             clauses.append("transmit_status = ?")
             params.append(transmit_status)
         if date_from:
@@ -934,28 +999,97 @@ class Database:
         return rows
 
     # ---- transmit log ---------------------------------------------------
-    def add_transmit_log(
-        self,
-        channel: int,
-        byte_count: int,
-        success: bool,
-        text: str,
-        manual: bool = False,
-        error: str = "",
-        transport: str = "meshcore",
-    ) -> None:
-        cols = ("ts, channel, byte_count, success, manual, text, error, transport")
-        vals = (_now(), channel, byte_count, int(success), int(manual), text, error, transport)
+    def begin_transmission(self, channel, text, transport, manual, context=None, retry=False, policy=None, evidence=None):
+        """Commit an intent and retry reservation before submitting any radio bytes."""
+        row_id, index, total = context if context else (None, None, None)
         with self._lock:
-            try:
-                self._conn.execute(
-                    "INSERT INTO transmit_log(%s) VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % cols, vals)
-            except sqlite3.OperationalError:
-                # migrate an older DB that predates the transport column
-                self._conn.execute("ALTER TABLE transmit_log ADD COLUMN transport TEXT")
-                self._conn.execute(
-                    "INSERT INTO transmit_log(%s) VALUES (?, ?, ?, ?, ?, ?, ?, ?)" % cols, vals)
+            cursor = self._conn.execute(
+                "INSERT INTO transmit_log(ts,channel,byte_count,success,manual,text,error,transport,outcome,evidence,service_history_id,part_index,part_total,uncertainty_retry) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (_now(), channel, len(text.encode("utf-8")), None, int(manual), text, "", transport,
+                 "submitting", json.dumps({"policy": vars(policy) if policy else {}} | (evidence or {})), row_id, index, total, int(retry)))
+            log_id = cursor.lastrowid
+            if context:
+                row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id = ?", (row_id,)).fetchone()
+                parts = json.loads(row[0] or "[]") if row else []
+                while len(parts) < total:
+                    parts.append({"status": "pending"})
+                old = parts[index]
+                parts[index] = old | {"status": "submitting",
+                                     "may_have_transmitted": old.get("may_have_transmitted", False) or old.get("status") in COMPLETED,
+                                     "attempts": old.get("attempts", 0) + 1,
+                                     "uncertainty_retries": old.get("uncertainty_retries", 0) + int(retry),
+                                     "attempt_ids": old.get("attempt_ids", []) + [log_id], "log_id": log_id,
+                                     "policy": vars(policy) if policy else {}, "submitted_at": _now()}
+                self._conn.execute("UPDATE service_history SET delivery_parts = ? WHERE id = ?", (json.dumps(parts), row_id))
             self._conn.commit()
+        return log_id
+
+    def tracking_transmissions(self):
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat(timespec="seconds")
+        with self._lock:
+            return self._conn.execute("SELECT * FROM transmit_log WHERE (ts>=? OR json_extract(evidence, '$.repeat_expires_at') > ?) AND outcome IN ('unconfirmed','local_confirmed','repeat_confirmed') ORDER BY id DESC LIMIT 256", (cutoff, datetime.now(timezone.utc).timestamp())).fetchall()
+
+    def delivery_policy(self, context, fallback):
+        if not context:
+            return fallback
+        from .transmission import TransmissionPolicy
+        with self._lock:
+            row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id=?", (context[0],)).fetchone()
+            parts = json.loads(row[0] or "[]") if row else []
+        for part in parts:
+            if part.get("policy"):
+                return TransmissionPolicy(**part["policy"])
+        return fallback
+
+    def uncertainty_retry_used(self, context):
+        if not context:
+            return False
+        with self._lock:
+            used = self._conn.execute("SELECT 1 FROM transmit_log WHERE service_history_id=? AND part_index=? AND uncertainty_retry=1 LIMIT 1", context[:2]).fetchone()
+            row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id=?", (context[0],)).fetchone()
+            parts = json.loads(row[0] or "[]") if row else []
+            reserved = context[1] < len(parts) and parts[context[1]].get("uncertainty_retry_reserved", False)
+            return bool(used or reserved)
+
+    def reserve_uncertainty_retry(self, context):
+        if not context:
+            return
+        with self._lock:
+            row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id=?", (context[0],)).fetchone()
+            parts = json.loads(row[0] or "[]") if row else []
+            if context[1] < len(parts):
+                parts[context[1]]["uncertainty_retry_reserved"] = True
+                self._conn.execute("UPDATE service_history SET delivery_parts=? WHERE id=?", (json.dumps(parts), context[0]))
+                self._conn.commit()
+
+    def finish_transmission(self, result):
+        if result.log_id is None:
+            return
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM transmit_log WHERE id = ?", (result.log_id,)).fetchone()
+            if row is None:
+                return
+            evidence = json.loads(row["evidence"] or "{}") | result.as_record()
+            self._conn.execute("UPDATE transmit_log SET success=?, outcome=?, error=?, evidence=? WHERE id=?",
+                               (1 if result.confirmed else None if result else 0, result.outcome, result.detail, json.dumps(evidence), result.log_id))
+            self._conn.commit()
+        if row["service_history_id"] is not None:
+            self.record_delivery_part(row["service_history_id"], row["part_index"], row["part_total"], result, result.detail)
+            with self._lock:
+                current = self._conn.execute("SELECT delivery_parts, transmit_status FROM service_history WHERE id=?", (row["service_history_id"],)).fetchone()
+            if current and current["transmit_status"] in ("success", "repeat_confirmed", "unconfirmed", "interrupted"):
+                parts = json.loads(current["delivery_parts"] or "[]")
+                if parts and all(part.get("status") in COMPLETED for part in parts):
+                    self.update_service_history(row["service_history_id"], "success")
+
+    def add_transmit_log(self, channel, byte_count, success, text, manual=False, error="", transport="meshcore"):
+        if isinstance(success, TxResult) and success.log_id is not None:
+            self.finish_transmission(success)
+            return success.log_id
+        result = TxResult.legacy(success, error)
+        result.log_id = self.begin_transmission(channel, text, transport, manual)
+        self.finish_transmission(result)
+        return result.log_id
 
     def query_transmit_log(self, limit: int = 200) -> list[sqlite3.Row]:
         with self._lock:

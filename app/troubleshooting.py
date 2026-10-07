@@ -46,7 +46,7 @@ def current(db, source):
         # Expiry or feed disappearance alone must not fabricate a closure.
         where = "missing_polls<2 AND (active=1 OR (json_extract(normalized_data, '$.ended')=1 AND EXISTS " \
                 "(SELECT 1 FROM service_history h WHERE h.source='traffic' AND h.external_id=traffic_items.item_id " \
-                "AND h.transmit_status='success')))"
+                "AND h.transmit_status IN ('success','repeat_confirmed','unconfirmed'))))"
     return rows(db, f'SELECT * FROM {table} WHERE {where}')
 
 
@@ -64,9 +64,16 @@ class ReplayTx:
     def __init__(self, real, job=None):
         self.real, self.job = real, job
         self.message_budget = real.message_budget
-    def enqueue_notice(self, parts, on_result=None, priority=1, valid_if=None):
+    @property
+    def supports_delivery_context(self):
+        return bool(getattr(self.real, 'supports_delivery_context', False))
+
+    def enqueue_notice(self, parts, on_result=None, priority=1, valid_if=None, delivery_context=None):
         def valid():
             return (not self.job or not self.job['cancel_requested']) and (not valid_if or valid_if())
+        if self.supports_delivery_context:
+            return self.real.enqueue_notice(parts, on_result=on_result, priority=priority,
+                                            valid_if=valid, delivery_context=delivery_context)
         return self.real.enqueue_notice(parts, on_result=on_result, priority=priority, valid_if=valid)
     def enqueue_verification(self, *args, **kwargs):
         return self.real.enqueue_verification(*args, **kwargs)
@@ -360,5 +367,7 @@ def diagnostics(app):
                                      migrations=rows(db,'SELECT name FROM history_migrations'),sqlite_version=rows(db,'SELECT sqlite_version() AS version')[0]['version']),
                        services=services,traffic_feeds=feeds,queue=queue_info,radios=tx.status(),
                        recent_errors=[dict(r) for r in db.recent_errors(20)],
-                       last_confirmed=rows(db,"SELECT ts,transport FROM transmit_log WHERE success=1 ORDER BY id DESC LIMIT 1"),
+                       last_confirmed=rows(db,"SELECT ts,transport,outcome FROM transmit_log WHERE success=1 ORDER BY id DESC LIMIT 1"),
+                       recent_unconfirmed=rows(db,"SELECT ts,transport,channel,text,error FROM transmit_log WHERE outcome='unconfirmed' ORDER BY id DESC LIMIT 10"),
+                       pending_transmissions=rows(db,"SELECT ts,transport,channel,text FROM transmit_log WHERE outcome='submitting' OR (outcome='unconfirmed' AND json_extract(evidence,'$.retry_pending')=1) ORDER BY id DESC LIMIT 10"),
                        boundaries='NSW Spatial Services snapshot dated 1 October 2026; simplified point matching does not establish a road footprint'))

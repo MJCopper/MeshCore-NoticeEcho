@@ -241,6 +241,8 @@ class TrafficPoller:
                     continue
                 if not force and dry_run and latest_send["transmit_status"] == "dry-run":
                     continue
+            if not force and latest_send and latest_send["revision_hash"] == item.revision and latest_send["transmit_status"] in ("success", "repeat_confirmed", "unconfirmed"):
+                continue
             is_closing = closing(item, council)
             action = "ENDED" if is_closing else ("UPDATE" if self.db.latest_successful_broadcast("traffic", item.item_id)
                       else "NEW")
@@ -304,7 +306,7 @@ class TrafficPoller:
                             and ("ROADWORK" not in event.category or "roadwork" in current.get("traffic_types", [])))))
 
             if submit_notice(self.tx, [parts[i] for i in indices], on_result, priority=5,
-                             valid_if=valid_if):
+                             valid_if=valid_if, delivery_context=(row_id, tuple(indices), len(parts))):
                 queued = True
             else:
                 status, reason = queue_refusal(parts)

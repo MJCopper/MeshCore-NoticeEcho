@@ -153,6 +153,8 @@ class RFSPoller:
                 continue
             if latest and latest["revision_hash"] == incident.revision and latest["transmit_status"] == "dry-run" and dry_run and not force:
                 continue
+            if not force and latest and latest["revision_hash"] == incident.revision and latest["transmit_status"] in ("success", "repeat_confirmed", "unconfirmed"):
+                continue
             action = "CLOSED" if closing else "UPDATE" if previous and previous["last_sent_hash"] else "NEW"
             try:
                 parts = format_incident(incident, budget, action=action)
@@ -206,7 +208,7 @@ class RFSPoller:
 
             if submit_notice(self.tx, [parts[i] for i in indices], on_result,
                              priority=0 if incident.level == "Emergency Warning" else 2,
-                             valid_if=valid_if):
+                             valid_if=valid_if, delivery_context=(row_id, tuple(indices), len(parts))):
                 queued = True
             else:
                 status, reason = queue_refusal(parts)

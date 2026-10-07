@@ -5,7 +5,8 @@
     <span style="display:flex;gap:8px;align-items:center;">
       {% set tp = r["transport"] %}
       {% if tp %}<span class="pill radio">{{ "MeshCore" if tp == "meshcore" else tp }}</span>{% endif %}
-      {% if r["success"] %}<span class="pill ok">ok</span>{% else %}<span class="pill bad">fail</span>{% endif %}
+      {% set outcome = r['outcome'] %}
+      <span class="pill {{ 'ok' if r['success'] else 'muted' if outcome in ('unconfirmed', 'submitting') else 'bad' }}">{{ {'local_confirmed':'Locally confirmed','repeat_confirmed':'Repeat confirmed','unconfirmed':'Unconfirmed','rejected':'Rejected','submitting':'Submission in progress','not_attempted':'Not attempted'}.get(outcome, outcome) }}</span>
       <span class="pill muted">{{ "manual" if r["manual"] else "auto" }}</span>
       {% if tp %}
       <button class="secondary" style="padding:4px 12px;font-size:12.5px;"
@@ -23,10 +24,17 @@
   </div>
   {% if r["error"] %}
   <div class="rec-areawrap">
-    <div class="rec-lbl">Error</div>
-    <div class="rec-area" style="color:var(--bad);">{{ r["error"] }}</div>
+    <div class="rec-lbl">Diagnostic</div>
+    <div class="rec-area" >{{ r["error"] }}</div>
   </div>
   {% endif %}
+  {% set evidence = r['evidence'] | transmission_evidence %}
+  <details><summary>Transmission evidence</summary>
+    <p>Attempt {{ evidence.get('attempt', 1) }}{% if r['uncertainty_retry'] %} · optional uncertainty retry{% endif %}{% if evidence.get('elapsed_seconds') is not none %} · {{ '%.2f'|format(evidence.get('elapsed_seconds', 0)) }} seconds{% endif %}</p>
+    <p>Command accepted: {{ 'yes' if evidence.get('accepted') else 'not confirmed' }} · Heard repeats: {{ evidence.get('repeats', 0) }} observations</p>
+    <p>Local TX counter: {{ evidence.get('counter_before') if evidence.get('counter_before') is not none else 'unavailable' }} → {{ evidence.get('counter_after') if evidence.get('counter_after') is not none else 'unavailable' }}{% if evidence.get('counter_reset') %} · counter reset{% endif %}</p>
+    {% if evidence.get('retry_pending') %}<p>Waiting before optional retry</p>{% endif %}
+  </details>
 </div>
 {% else %}
 <div class="rec"><span class="hint">No transmissions yet.</span></div>

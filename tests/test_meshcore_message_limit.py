@@ -92,7 +92,10 @@ async def test_unreadable_local_tx_counter_is_not_reported_as_success(monkeypatc
 
     radio._mc = SimpleNamespace(commands=SimpleNamespace(send_chan_msg=send_chan_msg))
     monkeypatch.setattr(radio, "_flood_tx", unreadable_counter)
-    with pytest.raises(TxUnsent) as raised:
-        await radio.send_text("warning", 0)
-    assert raised.value.category == "unverified"
+    from app.transmission import TransmissionPolicy
+    radio.policy = TransmissionPolicy(confirmation_seconds=0.01)
+    result = await radio.send_text("warning", 0)
+    assert result.outcome == "unconfirmed"
+    assert not result.confirmed
+    assert result  # continuation is permitted; confirmation is not claimed
     assert calls == [(0, "warning")]
