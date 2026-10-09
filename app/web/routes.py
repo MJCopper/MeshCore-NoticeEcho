@@ -756,7 +756,7 @@ async def meshcore_settings_page(request: Request, saved: str = ""):
         error = str(exc)
     saved_labels = {"name": "Device name", "channel": "Channel name",
                     "added": "Channel", "removed": "Channel removal",
-                    "power": "TX power", "radio": "Radio parameters"}
+                    "power": "TX power", "radio": "Radio parameters", "path-hash": "Path hash size"}
     return render(request, "meshcore_settings.html", device=device,
                   error=error, saved_label=saved_labels.get(saved, ""),
                   live_channel=int(_db(request).get_setting("meshcore_channel", 0)),
@@ -857,6 +857,31 @@ async def save_meshcore_radio(request: Request, freq: float = Form(...), bw: flo
     except RuntimeError as exc:
         return await _device_edit_error(request, str(exc), 503)
     return RedirectResponse("/meshcore/settings?saved=radio", status_code=303)
+
+
+@router.post("/meshcore/settings/path-hash", response_class=HTMLResponse)
+async def save_meshcore_path_hash(request: Request, size: int = Form(...)):
+    try:
+        await _tx(request).set_path_hash_bytes(size)
+    except ValueError as exc:
+        return await _device_edit_error(request, str(exc), 400)
+    except RuntimeError as exc:
+        return await _device_edit_error(request, str(exc), 503)
+    return RedirectResponse("/meshcore/settings?saved=path-hash", status_code=303)
+
+
+@router.post("/meshcore/settings/console")
+async def meshcore_console(request: Request, command: str = Form(...)):
+    from ..transmit import MeshCoreTransmitter
+    from fastapi.responses import JSONResponse
+    try:
+        output = await _tx(request).execute_companion_command(command)
+        status, ok = 200, True
+    except (ValueError, RuntimeError) as exc:
+        output = str(exc)
+        status, ok = (400 if isinstance(exc, ValueError) else 503), False
+    return JSONResponse({"ok": ok, "output": MeshCoreTransmitter.redact_console(output)}, status_code=status,
+                        headers={"Cache-Control": "no-store"})
 
 
 # ---- manual send -------------------------------------------------------

@@ -20,6 +20,28 @@ def contains(text, term):
     return bool(normalise(term) and f" {normalise(term)} " in f" {normalise(text)} ")
 
 
+def occurrences(text, phrase):
+    """Token spans in normalized text, including overlapping occurrences."""
+    tokens, needle = normalise(text).split(), normalise(phrase).split()
+    return tuple((i, i + len(needle)) for i in range(len(tokens) - len(needle) + 1)
+                 if needle and tokens[i:i + len(needle)] == needle)
+
+
+def location_matches(fields, positive_terms, exclusions):
+    matches, found, suppressed = [], [], []
+    for field, value in fields:
+        spans = [(phrase, start, end) for phrase in exclusions for start, end in occurrences(value, phrase)]
+        found.extend((phrase, field, start, end) for phrase, start, end in spans)
+        for term in positive_terms:
+            for start, end in occurrences(value, term):
+                blockers = [phrase for phrase, left, right in spans if left <= start and end <= right]
+                if blockers:
+                    suppressed.extend((term, field, phrase, start, end) for phrase in blockers)
+                else:
+                    matches.append((term, field))
+    return tuple(dict.fromkeys(matches)), tuple(dict.fromkeys(found)), tuple(dict.fromkeys(suppressed))
+
+
 def terms(values):
     values = values.splitlines() if isinstance(values, str) else values
     result, seen = [], set()
@@ -38,7 +60,7 @@ def terms(values):
     return result
 
 
-def configuration(all_nsw=False, councils=(), location_terms=(), bom_districts=(), include_uncertain=False):
+def configuration(all_nsw=False, councils=(), location_terms=(), bom_districts=(), include_uncertain=False, location_exclusions=()):
     catalogue = {council_key(name): name for name in COUNCILS}
     selected = []
     for name in councils:
@@ -49,7 +71,7 @@ def configuration(all_nsw=False, councils=(), location_terms=(), bom_districts=(
             selected.append(canonical)
     combined = terms([*terms(location_terms), *terms(bom_districts)])
     return dict(version=2, active=True, all_nsw=bool(all_nsw), councils=sorted(selected),
-                location_terms=combined,
+                location_terms=combined, location_exclusions=terms(location_exclusions),
                 include_uncertain=bool(include_uncertain))
 
 
@@ -66,7 +88,7 @@ def proposal(settings):
     if active(settings):
         policy = settings[KEY]
         return configuration(policy["all_nsw"], policy["councils"], policy.get("location_terms", []),
-                             policy.get("bom_districts", []), policy["include_uncertain"])
+                             policy.get("bom_districts", []), policy["include_uncertain"], policy.get("location_exclusions", []))
     # Include all saved service selections, including disabled services, and make
     # broadening explicit before activation rather than silently merging defaults.
     return configuration(any(settings.get(f"{s}_all_councils", s == "bom") for s in ("bom", "rfs", "traffic")),
@@ -86,6 +108,9 @@ class Coverage:
     policy: dict | None = None
     jurisdiction: str = "unknown"
     jurisdiction_reason: str = ""
+
+    exclusion_matches: tuple = ()
+    suppressed_matches: tuple = ()
 
     def metadata(self):
         return asdict(self)
@@ -111,7 +136,9 @@ def evaluate(policy, service, councils=(), fields=(), district_fields=(), jurisd
     matched_councils = tuple(x for x in councils if council_key(x) in selected)
     if service == "bom" and policy.get("version", 1) >= 2:
         fields = (*fields, *(("affected area", value) for value in district_fields))
-    matches = tuple(dict.fromkeys((term, field) for term in shared_terms for field, value in fields if contains(value, term)))
+    matches, excluded, suppressed = location_matches(fields, shared_terms, policy.get("location_exclusions", []))
+    evidence.update(exclusion_matches=excluded, suppressed_matches=suppressed)
+    ignored = "; ".join(dict.fromkeys(f'ignored “{term}” within “{phrase}” — {field}' for term, field, phrase, start, end in suppressed))
     districts = tuple(name for name in districts_only if service == "bom" and
                       any(contains(value, name) for value in district_fields))
     reasons = []
@@ -122,10 +149,10 @@ def evaluate(policy, service, councils=(), fields=(), district_fields=(), jurisd
     if matches:
         reasons.extend(f'location term “{term}” — {field}' for term, field in matches)
     if reasons:
-        return Coverage(True, matched_councils, districts, matches, "OR match", "Included: " + "; ".join(reasons), **evidence)
+        return Coverage(True, matched_councils, districts, matches, "OR match", "Included: " + "; ".join(reasons) + ("; " + ignored if ignored else ""), **evidence)
     if uncertain and policy["include_uncertain"]:
-        return Coverage(True, method="uncertain geography", reason="Included: uncertain geography fallback", **evidence)
-    return Coverage(False, reason="Excluded: no geographic coverage matched", **evidence)
+        return Coverage(True, method="uncertain geography", reason="Included: uncertain geography fallback" + ("; " + ignored if ignored else ""), **evidence)
+    return Coverage(False, reason=("Excluded: location terms matched only within excluded phrases; " + ignored if suppressed else "Excluded: no geographic coverage matched"), **evidence)
 
 
 def incident_coverage(item, settings):

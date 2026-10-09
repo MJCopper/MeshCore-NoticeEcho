@@ -351,3 +351,130 @@ def test_missing_saved_evidence_is_reported_without_breaking_preview():
     response=TestClient(web_app(db)).get('/settings/geography')
     assert response.status_code==200 and 'saved geographic evidence is incomplete' in response.text
     db.close()
+
+
+@pytest.mark.parametrize('text,included', [
+    ('near Moonbi Street', False), ('Moonbi Street, Moonbi', True),
+    ('Moonbi Street and Moonbi Street', False), ('Moonbi St', True),
+    ('Moonbird Street', False), ('near MOONBI—STREET', False),
+    ('near Ｍｏｏｎｂｉ   Street', False), ('Moonbi Street then Kootingal', True),
+])
+@pytest.mark.parametrize('service', ['bom', 'rfs', 'traffic'])
+def test_location_exclusions_suppress_only_contained_occurrences(text, included, service):
+    policy = configuration(location_terms=['Moonbi', 'Kootingal'], location_exclusions=['Moonbi Street'])
+    result = evaluate(policy, service, fields=(('location', text),))
+    assert result.included is included
+    if 'Street, Moonbi' in text:
+        assert result.term_matches == (('Moonbi', 'location'),)
+        assert result.suppressed_matches
+        assert 'ignored' in result.reason
+
+
+def test_exclusions_keep_separate_fields_and_other_geographic_criteria():
+    policy = configuration(location_terms=['Moonbi'], location_exclusions=['Moonbi Street'])
+    fields = (('road details', 'near Moonbi Street'), ('suburb', 'Moonbi'))
+    assert evaluate(policy, 'traffic', fields=fields).term_matches == (('Moonbi', 'suburb'),)
+    blocked = fields[:1]
+    assert evaluate(policy | {'councils': ['Tamworth Regional']}, 'traffic', ('Tamworth Regional',), blocked).included
+    assert evaluate(policy | {'all_nsw': True}, 'traffic', fields=blocked).included
+    assert evaluate(policy | {'include_uncertain': True}, 'traffic', fields=blocked, uncertain=True).included
+    assert not evaluate(policy | {'all_nsw': True}, 'traffic', fields=blocked, jurisdiction='VIC').included
+    legacy = policy | {'version': 1, 'bom_districts': ['Hunter']}
+    assert evaluate(legacy, 'bom', fields=blocked, district_fields=('Hunter',)).included
+    assert not evaluate(policy, 'traffic', fields=(('road', 'Moonbi'), ('suburb', 'Street'))).suppressed_matches
+
+
+def test_overlapping_exclusions_and_longer_positive_phrase():
+    policy = configuration(location_terms=['Moonbi', 'Moonbi Street Bridge'],
+                           location_exclusions=['Moonbi Street', 'near Moonbi Street'])
+    result = evaluate(policy, 'traffic', fields=(('road', 'near Moonbi Street Bridge'),))
+    assert result.term_matches == (('Moonbi Street Bridge', 'road'),)
+    assert len(result.exclusion_matches) == 2
+    assert len(result.suppressed_matches) == 2
+
+
+def test_exclusion_configuration_validation_and_old_policy_compatibility():
+    policy = configuration(location_terms=['Moonbi'], location_exclusions=' Moonbi Street\nmoonbi street\n\nMoonbi St')
+    assert policy['location_exclusions'] == ['Moonbi Street', 'Moonbi St']
+    assert proposal({KEY: policy}) == policy
+    old = dict(policy); old.pop('location_exclusions')
+    assert proposal({KEY: old})['location_exclusions'] == []
+    assert evaluate(old, 'traffic', fields=(('road', 'Moonbi Street'),)).included
+    for entries in [['x'*121], [str(i) for i in range(401)]]:
+        with pytest.raises(ValueError):
+            configuration(location_exclusions=entries)
+
+
+def test_exclusion_settings_preview_save_reload_and_validation():
+    db = Database(':memory:')
+    db.set_setting(KEY, configuration(location_terms=['Moonbi']))
+    original = db.all_settings()
+    client = TestClient(web_app(db))
+    form = {'location_terms': 'Moonbi', 'location_exclusions': 'Moonbi Street', 'action': 'preview'}
+    response = client.post('/settings/geography', data=form)
+    assert response.status_code == 200
+    assert db.all_settings() == original
+    assert 'Moonbi Street' in response.text
+    form['action'] = 'save'
+    assert client.post('/settings/geography', data=form, follow_redirects=False).status_code == 303
+    assert db.get_setting(KEY)['location_exclusions'] == ['Moonbi Street']
+    assert 'Moonbi Street' in client.get('/settings/geography').text
+    response = client.post('/settings/geography', data=form | {'location_exclusions': 'x'*121})
+    assert response.status_code == 422
+    assert db.get_setting(KEY)['location_exclusions'] == ['Moonbi Street']
+
+
+def test_real_new_lambton_false_positive_and_genuine_moonbi():
+    from app.geography import traffic_coverage, incident_coverage
+    policy = configuration(councils=['Tamworth Regional'], location_terms=['Moonbi', 'New England'], location_exclusions=['Moonbi Street'])
+    settings = {KEY: policy}
+    false_positive = replace(traffic_item(), title='CRASH Car', road='Bridges Road', suburb='New Lambton', road_details='near Moonbi Street')
+    before = traffic_coverage(false_positive, 'Newcastle', {KEY: policy | {'location_exclusions': []}})
+    after = traffic_coverage(false_positive, 'Newcastle', settings)
+    assert before.included and not after.included
+    assert after.suppressed_matches == (('Moonbi', 'road details', 'Moonbi Street', 1, 2),)
+    assert traffic_coverage(replace(false_positive, suburb='Moonbi'), 'Newcastle', settings).included
+    assert traffic_coverage(traffic_item(), 'Tamworth Regional', settings).included
+    assert incident_coverage(replace(rfs_item(), name='Moonbi Street', location='Moonbi Street', state='NSW'), settings).included is False
+    assert incident_coverage(replace(rfs_item(), location='Moonbi Street, Moonbi'), settings).included
+
+
+def test_bom_exclusions_and_closure_evidence_preserved():
+    from app.geography import closure_coverage
+    policy = configuration(location_terms=['Moonbi'], location_exclusions=['Moonbi Street'])
+    alert = Alert('geo-exclusion', 'Flood Warning', 'Flood Warning', 'NSW', '', '', 'Alert')
+    blocked = bom_coverage(replace(alert, area_desc='Moonbi Street'), CouncilMatch('unknown'), {KEY: policy})
+    assert not blocked.included
+    assert bom_coverage(replace(alert, area_desc='Moonbi Street, Moonbi'), CouncilMatch('unknown'), {KEY: policy}).included
+    db = SimpleNamespace(latest_successful_broadcast=lambda *args: True)
+    for service in ('bom', 'rfs', 'traffic'):
+        closed = closure_coverage(blocked, db, service, 'geo-exclusion', True)
+        assert closed.included and closed.suppressed_matches == blocked.suppressed_matches
+    mixed = replace(alert, area_desc='Moonbi Street, Moonbi', warning_summary='Flooding is no longer occurring in Moonbi and the warning for this district is CANCELLED.')
+    assert not bom_coverage(mixed, CouncilMatch('unknown'), {KEY: policy}).included
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('service', ['bom', 'rfs', 'traffic'])
+async def test_reprocessing_and_resend_apply_current_exclusions(service):
+    db, radio = prepare(service)
+    app = web_app(db)
+    if service == 'bom':
+        item = dict(id='bom-excluded', region='NSW', event='Flood Warning', headline='Flood Warning', area_desc='Moonbi', references=[])
+        app.state.poller = BomPoller(db, radio)
+        db.replace_bom_current([item], {'NSW'}, '2026-10-05T00:00:00Z')
+    elif service == 'rfs':
+        app.state.rfs_poller = RFSPoller(db, radio, SimpleNamespace(fetch=None))
+        db.rfs_save_incident(rfs_item(), rfs_item().revision)
+    else:
+        app.state.traffic_poller = TrafficPoller(db, radio)
+        app.state.traffic_poller._councils = []
+        db.traffic_save_item(traffic_item(), '', True)
+    db.set_setting(KEY, configuration(location_terms=['Moonbi'], location_exclusions=['Moonbi']))
+    runner = Troubleshooting(app)
+    for mode in ('reprocess', 'resend'):
+        preview = await runner.preview(service, mode)
+        assert not preview['errors']
+        assert preview['notices'] == 0
+    assert not radio.pending
+    db.close()

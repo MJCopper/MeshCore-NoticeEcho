@@ -93,10 +93,11 @@ async def save_geographic_settings(request: Request):
     try:
         policy = configuration(bool(form.get("all_nsw")), form.getlist("councils"),
                                form.get("location_terms", ""), form.get("bom_districts", ""),
-                               bool(form.get("include_uncertain")))
+                               bool(form.get("include_uncertain")), form.get("location_exclusions", ""))
     except ValueError as exc:
         submitted = dict(version=2, active=True, all_nsw=bool(form.get("all_nsw")), councils=form.getlist("councils"),
                          location_terms=str(form.get("location_terms", "")).splitlines() + str(form.get("bom_districts", "")).splitlines(),
+                         location_exclusions=str(form.get("location_exclusions", "")).splitlines(),
                          include_uncertain=bool(form.get("include_uncertain")))
         return page(request, submitted, error=str(exc))
     action = form.get("action")

@@ -819,3 +819,213 @@ async def test_verified_rename_survives_dropdown_refresh_failure():
     result = await tx.rename_device_channel(2, "Weather")
     assert result["name"] == "Weather"
     assert "saved and verified" in result["refresh_error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('size', [1, 2, 3])
+async def test_path_hash_write_converts_bytes_to_mode_and_verifies(size):
+    class Commands:
+        mode = 0
+        async def send_device_query(self):
+            return SimpleNamespace(type=EventType.DEVICE_INFO, payload={'path_hash_mode': self.mode})
+        async def set_path_hash_mode(self, mode):
+            assert mode == size - 1
+            self.mode = mode
+            return SimpleNamespace(type=EventType.OK, payload={})
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=Commands())
+    assert await tx.set_path_hash_bytes(size) == size
+
+
+@pytest.mark.asyncio
+async def test_path_hash_rejects_unsupported_invalid_and_stale_readback():
+    calls = []
+    async def query():
+        return SimpleNamespace(type=EventType.DEVICE_INFO, payload={'path_hash_mode': 0})
+    async def save(mode):
+        calls.append(mode)
+        return SimpleNamespace(type=EventType.OK, payload={})
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace(send_device_query=query, set_path_hash_mode=save))
+    with pytest.raises(ValueError):
+        await tx.set_path_hash_bytes(4)
+    assert not calls
+    with pytest.raises(RuntimeError, match='verify'):
+        await tx.set_path_hash_bytes(3)
+    tx._mc.commands.set_path_hash_mode = None
+    with pytest.raises(RuntimeError, match='unsupported'):
+        await tx.set_path_hash_bytes(1)
+
+
+@pytest.mark.asyncio
+async def test_console_native_capability_and_reply_and_sender_refresh(monkeypatch):
+    if not hasattr(EventType, "CLI_REPLY"):
+        monkeypatch.setattr("meshcore.EventType", SimpleNamespace(**{name: getattr(EventType, name) for name in dir(EventType) if name.isupper()}, CLI_REPLY="cli_reply"))
+    calls = []
+    async def query():
+        return SimpleNamespace(type=EventType.DEVICE_INFO, payload={'fw ver': 14})
+    async def cli(command):
+        calls.append(command)
+        return SimpleNamespace(type=getattr(EventType, "CLI_REPLY", "cli_reply"), payload={'text': 'done'})
+    async def self_info():
+        return SimpleNamespace(type=EventType.SELF_INFO, payload={'name': 'New sender'})
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace(send_device_query=query, run_cli_command=cli, send_appstart=self_info))
+    assert await tx.execute_console('cli set name New sender') == 'done'
+    assert calls == ['set name New sender']
+    assert tx._sender_name == 'New sender'
+    async def old_query():
+        return SimpleNamespace(type=EventType.DEVICE_INFO, payload={'fw ver': 13})
+    tx._mc.commands.send_device_query = old_query
+    with pytest.raises(RuntimeError, match='unsupported'):
+        await tx.execute_console('cli version')
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('command', ['', 'info\nreboot', 'x'*201, 'unknown', 'stats wrong', 'name "unterminated'])
+async def test_console_invalid_commands_never_execute(command):
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace())
+    with pytest.raises(ValueError):
+        await tx.execute_console(command)
+
+
+def test_console_redacts_keys_and_sensitive_lines():
+    text = 'normal\nble_pin: 123456\nsecret: abc\n' + 'ab'*16
+    output = MeshCoreTransmitter.redact_console(text)
+    assert 'normal' in output
+    assert '123456' not in output and 'abc' not in output and 'ab'*16 not in output
+    assert len(MeshCoreTransmitter.redact_console('x'*9000)) == 8192
+
+
+@pytest.mark.asyncio
+async def test_console_manager_refuses_busy_and_bounds_timeout(monkeypatch):
+    tx = TransmitManager(SimpleNamespace(get_setting=lambda key, default=None: default))
+    radio = SimpleNamespace(execute_console=None, redact_console=MeshCoreTransmitter.redact_console)
+    monkeypatch.setattr(tx, '_saved_radio', lambda: radio)
+    async with tx._lock:
+        with pytest.raises(RuntimeError, match='busy'):
+            await tx.execute_companion_command('info')
+    async def execute(command):
+        await asyncio.sleep(10)
+    radio.execute_console = execute
+    real_wait = asyncio.wait_for
+    async def short_wait(operation, timeout):
+        assert timeout == 15
+        return await real_wait(operation, 0.01)
+    monkeypatch.setattr('app.transmit.asyncio.wait_for', short_wait)
+    with pytest.raises(RuntimeError, match='timed out'):
+        await tx.execute_companion_command('info')
+    assert not tx._lock.locked()
+
+
+def test_console_web_routes_escape_output_and_path_hash_redirect():
+    client, radio = _web_client()
+    async def execute(command):
+        return '<script>alert(1)</script>\nPIN: 123456'
+    async def set_hash(size):
+        assert size == 3
+    radio.execute_companion_command = execute
+    radio.set_path_hash_bytes = set_hash
+    page = client.get('/meshcore/settings')
+    assert 'Companion command console' in page.text
+    assert 'console-history' in page.text
+    response = client.post('/meshcore/settings/console', data={'command': 'info'})
+    assert response.json()['ok']
+    assert '123456' not in response.text
+    assert response.headers['cache-control'] == 'no-store'
+    assert client.post('/meshcore/settings/path-hash', data={'size': 3}, follow_redirects=False).headers['location'].endswith('saved=path-hash')
+    async def unsupported(command):
+        raise RuntimeError('Native CLI unsupported')
+    radio.execute_companion_command = unsupported
+    response = client.post('/meshcore/settings/console', data={'command': 'cli version'})
+    assert response.status_code == 503 and not response.json()['ok']
+
+
+@pytest.mark.asyncio
+async def test_console_native_error_reply_reports_failure(monkeypatch):
+    if not hasattr(EventType, "CLI_REPLY"):
+        monkeypatch.setattr("meshcore.EventType", SimpleNamespace(**{name: getattr(EventType, name) for name in dir(EventType) if name.isupper()}, CLI_REPLY="cli_reply"))
+    async def query():
+        return SimpleNamespace(type=EventType.DEVICE_INFO, payload={'fw ver': 14})
+    async def cli(command):
+        return SimpleNamespace(type=getattr(EventType, "CLI_REPLY", "cli_reply"), payload={'text': 'Unknown command'})
+    async def self_info():
+        return SimpleNamespace(type=EventType.SELF_INFO, payload={'name': 'Node'})
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace(send_device_query=query, run_cli_command=cli, send_appstart=self_info))
+    with pytest.raises(RuntimeError, match='Unknown command'):
+        await tx.execute_console('cli unsupported')
+
+
+def test_path_hash_selector_displays_current_value_and_capabilities():
+    client, radio = _web_client()
+    original = radio.get_device_settings
+    async def settings():
+        data = await original()
+        return dict(data, path_hash_bytes=2, path_hash_supported=True, cli_supported=True)
+    radio.get_device_settings = settings
+    page = client.get('/meshcore/settings')
+    assert 'value="2" selected' in page.text
+    assert 'Native CLI: Available' in page.text
+    async def invalid(size):
+        raise ValueError('Path hash size must be 1, 2, or 3 bytes per hop')
+    radio.set_path_hash_bytes = invalid
+    assert client.post('/meshcore/settings/path-hash', data={'size': 4}).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_console_manager_redacts_and_keeps_lock_for_command(monkeypatch):
+    tx = TransmitManager(SimpleNamespace(get_setting=lambda key, default=None: default))
+    async def execute(command):
+        assert tx._lock.locked()
+        return 'secret: ' + 'ab'*16
+    radio = SimpleNamespace(execute_console=execute, redact_console=MeshCoreTransmitter.redact_console)
+    monkeypatch.setattr(tx, '_saved_radio', lambda: radio)
+    assert await tx.execute_companion_command('info') == '[sensitive output hidden]'
+    assert not tx._lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_console_stats_and_verified_path_hash_dispatch():
+    async def stats():
+        return SimpleNamespace(type=EventType.STATS_PACKETS, payload={'flood_tx': 12})
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace(get_stats_packets=stats))
+    assert '"flood_tx": 12' in await tx.execute_console('stats packets')
+    async def save(size):
+        assert size == 3
+        return size
+    tx.set_path_hash_bytes = save
+    assert await tx.execute_console('path-hash 3') == 'Verified: 3 bytes per hop'
+
+
+@pytest.mark.asyncio
+async def test_console_native_requires_sdk_reply_event(monkeypatch):
+    monkeypatch.setattr("meshcore.EventType", SimpleNamespace(**{name: getattr(EventType, name) for name in dir(EventType) if name.isupper() and name != "CLI_REPLY"}))
+    async def query():
+        return SimpleNamespace(type=EventType.DEVICE_INFO, payload={'fw ver': 14})
+    async def cli(command):
+        pytest.fail('unsupported SDK must not submit a native command')
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace(send_device_query=query, run_cli_command=cli))
+    with pytest.raises(RuntimeError, match='unsupported'):
+        await tx.execute_console('cli version')
+
+
+@pytest.mark.asyncio
+async def test_repeat_preparation_refreshes_sender_invalidated_by_native_cli():
+    from app.transmission import TxResult
+    async def channel(index):
+        return SimpleNamespace(type=EventType.CHANNEL_INFO, payload={'channel_secret': bytes(range(16))})
+    async def self_info():
+        return SimpleNamespace(type=EventType.SELF_INFO, payload={'name': 'Updated sender'})
+    tx = MeshCoreTransmitter('serial')
+    tx._mc = SimpleNamespace(is_connected=True, commands=SimpleNamespace(get_channel=channel, send_appstart=self_info))
+    tx._subscriptions = [object()]
+    tx._sender_name = None
+    result = TxResult('unconfirmed', timestamp=123)
+    await tx._prepare_repeat(result, 'notice', 0)
+    assert tx._sender_name == 'Updated sender'
+    assert result.packet_id

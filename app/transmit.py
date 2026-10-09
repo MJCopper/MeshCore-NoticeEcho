@@ -135,6 +135,11 @@ class MeshCoreTransmitter(Transmitter):
             if response is None or response.type != EventType.CHANNEL_INFO:
                 raise ValueError("channel information unavailable")
             self._channel_exists = True
+            if not isinstance(self._sender_name, str):
+                info = await asyncio.wait_for(self._mc.commands.send_appstart(), 2.0)
+                if info.type != EventType.SELF_INFO or not isinstance((info.payload or {}).get("name"), str):
+                    raise ValueError("sender name unavailable after companion command")
+                self._sender_name = info.payload["name"]
             secret = response.payload.get("channel_secret")
             if isinstance(secret, str):
                 secret = bytes.fromhex(secret)
@@ -428,8 +433,87 @@ class MeshCoreTransmitter(Transmitter):
             "radio_cr": settings.get("radio_cr"),
             "channels": channels,
             "available_slots": available_slots,
+            "path_hash_bytes": device.get("path_hash_mode") + 1 if device.get("path_hash_mode") in (0, 1, 2) else None,
+            "path_hash_supported": device.get("path_hash_mode") in (0, 1, 2) and callable(getattr(self._mc.commands, "set_path_hash_mode", None)),
+            "cli_supported": device.get("fw ver", 0) >= 14 and hasattr(EventType, "CLI_REPLY") and callable(getattr(self._mc.commands, "run_cli_command", None)),
             "max_channels": max_channels,
         }
+
+    async def set_path_hash_bytes(self, size: int) -> int:
+        from meshcore import EventType
+        if size not in (1, 2, 3):
+            raise ValueError("Path hash size must be 1, 2, or 3 bytes per hop")
+        if not self.connected:
+            raise RuntimeError("MeshCore radio is offline")
+        info = await self._mc.commands.send_device_query()
+        if info.type != EventType.DEVICE_INFO or (info.payload or {}).get("path_hash_mode") not in (0, 1, 2) or not callable(getattr(self._mc.commands, "set_path_hash_mode", None)):
+            raise RuntimeError("Path hash settings are unsupported by this firmware or SDK")
+        result = await self._mc.commands.set_path_hash_mode(size - 1)
+        self._channel_result(result, EventType.OK, "Saving path hash size")
+        verified = await self._mc.commands.send_device_query()
+        if verified.type != EventType.DEVICE_INFO or (verified.payload or {}).get("path_hash_mode") != size - 1:
+            raise RuntimeError("Could not verify the saved path hash size; refresh before retrying")
+        return size
+
+    @staticmethod
+    def redact_console(text):
+        import re
+        text = re.sub(r"(?im)^.*(?:secret|private.?key|password|pin|token).*$", "[sensitive output hidden]", str(text))
+        return re.sub(r"(?i)\b[0-9a-f]{32,}\b", "[key hidden]", text)[:8192]
+
+    async def execute_console(self, command: str) -> str:
+        import json
+        import shlex
+        from meshcore import EventType
+        if not command.strip() or len(command.encode("utf-8")) > 200 or any(ord(c) < 32 for c in command):
+            raise ValueError("Enter one command of at most 200 UTF-8 bytes without control characters")
+        words = shlex.split(command)
+        if words == ["help"]:
+            return "help | info | channels | stats core|radio|packets | path-hash [1|2|3] | name <name> | tx-power <dBm> | radio <MHz> <kHz> <SF> <CR> | cli <firmware command>"
+        if not self.connected:
+            raise RuntimeError("MeshCore radio is offline")
+        if words == ["info"]:
+            return json.dumps(await self.read_settings(), indent=2)
+        if words == ["channels"]:
+            return json.dumps(await self.read_channels(), indent=2)
+        if words[0] == "stats" and len(words) == 2 and words[1] in ("core", "radio", "packets"):
+            method = getattr(self._mc.commands, "get_stats_" + words[1], None)
+            if not callable(method):
+                raise RuntimeError("Statistics unsupported by this SDK")
+            result = await method()
+            if result is None or result.type == EventType.ERROR:
+                raise RuntimeError("Radio could not return statistics")
+            return json.dumps(result.payload or {}, indent=2, default=str)
+        if words[0] == "path-hash" and len(words) in (1, 2):
+            if len(words) == 1:
+                size = (await self.read_settings())["path_hash_bytes"]
+                return f"{size} bytes per hop" if size else "Path hash size not reported"
+            return f"Verified: {await self.set_path_hash_bytes(int(words[1]))} bytes per hop"
+        if words[0] == "name" and len(words) >= 2:
+            return "Verified name: " + await self.set_device_name(" ".join(words[1:]))
+        if words[0] == "tx-power" and len(words) == 2:
+            return f"Verified TX power: {await self.set_tx_power(int(words[1]))} dBm"
+        if words[0] == "radio" and len(words) == 5:
+            return json.dumps(await self.set_radio_parameters(float(words[1]), float(words[2]), int(words[3]), int(words[4])))
+        if words[0] == "cli" and len(words) >= 2:
+            info = await self._mc.commands.send_device_query()
+            method = getattr(self._mc.commands, "run_cli_command", None)
+            if info.type != EventType.DEVICE_INFO or (info.payload or {}).get("fw ver", 0) < 14 or not callable(method) or not hasattr(EventType, "CLI_REPLY"):
+                raise RuntimeError("Native CLI unsupported; requires companion protocol 14+ and a compatible SDK")
+            self._sender_name = None
+            result = await method(command.strip().split(None, 1)[1])
+            self._channel_result(result, EventType.CLI_REPLY, "Companion CLI")
+            # A native command may change the sender used for repeat matching.
+            self._sender_name = None
+            refreshed = await self._mc.commands.send_appstart()
+            if refreshed.type == EventType.SELF_INFO:
+                self._sender_name = (refreshed.payload or {}).get("name")
+            text = (result.payload or {}).get("text", "") or "Command completed without output"
+            import re
+            if re.match(r"(?i)^(error\b|err\b|unknown command|invalid command|unsupported|unrecognized)", text.strip()):
+                raise RuntimeError(self.redact_console(text))
+            return text
+        raise ValueError("Unknown command or arguments. Run help for supported commands")
 
     async def set_device_name(self, name: str) -> str:
         from meshcore import EventType
@@ -854,6 +938,29 @@ class TransmitManager:
     async def set_radio_parameters(self, freq: float, bw: float, sf: int, cr: int) -> dict:
         async with self._lock:
             return await self._saved_radio().set_radio_parameters(freq, bw, sf, cr)
+
+    async def set_path_hash_bytes(self, size: int) -> int:
+        async with self._lock:
+            try:
+                return await asyncio.wait_for(self._saved_radio().set_path_hash_bytes(size), 15)
+            except TimeoutError as exc:
+                raise RuntimeError("Path hash operation timed out; refresh before retrying") from exc
+
+    async def execute_companion_command(self, command: str) -> str:
+        if self._lock.locked():
+            raise RuntimeError("Companion busy; wait for the current transmission or settings operation")
+        async with self._lock:
+            radio = self._saved_radio()
+            try:
+                output = await asyncio.wait_for(radio.execute_console(command), 15)
+                if command.strip().split(None, 1)[0] == "cli":
+                    try:
+                        await asyncio.wait_for(self._refresh_saved_channels(), 5)
+                    except (RuntimeError, TimeoutError):
+                        output += "\nCommand completed, but channel cache refresh failed. Refresh settings before using changed channels."
+                return radio.redact_console(output)
+            except TimeoutError as exc:
+                raise RuntimeError("Command timed out; it may have applied. Refresh settings before retrying") from exc
 
     async def _refresh_saved_channels(self) -> None:
         channels = await self._saved_radio().read_channels()
