@@ -1,51 +1,5 @@
 {% extends "base.html" %}
-{% block title %} &middot; MeshCore Settings<section class="panel">
-  <details id="companion-console"><summary>Companion command console</summary>
-    <p class="hint">Commands: help; info; channels; stats core|radio|packets; path-hash [1|2|3]; name &lt;name&gt;; tx-power &lt;dBm&gt;; radio &lt;MHz&gt; &lt;kHz&gt; &lt;SF&gt; &lt;CR&gt;.</p>
-    <p class="hint">Native CLI: {{ 'Available' if device and device.get('cli_supported') else 'Unavailable or not reported (requires companion protocol 14+)' }}. Use cli &lt;firmware command&gt; for firmware-specific commands. Command history stays in this page until refreshed; sensitive output is hidden.</p>
-    <form id="console-form"><label for="console-command">Command</label><input id="console-command" maxlength="200" autocomplete="off" required list="console-history"><datalist id="console-history"></datalist><button id="console-run" type="submit">Run</button><button id="console-clear" type="button" class="secondary">Clear output</button></form>
-    <pre id="console-output" role="log" aria-live="polite" style="max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
-  </details>
-</section>
-<script>
-(() => {
-  const form = document.getElementById('console-form'), input = document.getElementById('console-command');
-  const output = document.getElementById('console-output'), run = document.getElementById('console-run');
-  const history = document.getElementById('console-history');
-  form.addEventListener('submit', async event => {
-    event.preventDefault(); if (run.disabled) return;
-    run.disabled = true;
-    const command = input.value.trim();
-    try {
-      const response = await fetch('/meshcore/settings/console', {method:'POST', body:new URLSearchParams({command})});
-      const result = await response.json();
-      output.textContent += `${new Date().toLocaleTimeString()} ${result.ok ? 'OK' : 'ERROR'}: ${result.output}\n\n`;
-      output.textContent = output.textContent.slice(-32768);
-      output.scrollTop = output.scrollHeight;
-      if (!/secret|key|pin|password|token|[0-9a-f]{32}/i.test(command)) {
-        if (!Array.from(history.options).some(item => item.value === command)) {
-          const item = document.createElement('option'); item.value = command; history.appendChild(item);
-          if (history.children.length > 30) history.firstElementChild.remove();
-        }
-      }
-      input.value = '';
-      if (result.ok && /^(cli|name|radio|tx-power|path-hash\s)/.test(command)) {
-        const page = await fetch('/meshcore/settings');
-        if (page.ok) {
-          const updated = new DOMParser().parseFromString(await page.text(), 'text/html');
-          const panels = Array.from(document.querySelectorAll('section.panel')).filter(panel => !panel.contains(form));
-          const replacements = Array.from(updated.querySelectorAll('section.panel')).filter(panel => !panel.querySelector('#console-form'));
-          if (panels.length === replacements.length) panels.forEach((panel, index) => panel.replaceWith(replacements[index]));
-          else output.textContent += 'Refresh the page to reload companion settings.\n';
-        } else output.textContent += 'Settings refresh failed; refresh the page.\n';
-      }
-    } catch (error) { output.textContent += 'Connection or refresh failed; refresh settings before retrying.\n'; }
-    finally { run.disabled = false; input.focus(); }
-  });
-  document.getElementById('console-clear').addEventListener('click', () => {output.textContent = '';});
-})();
-</script>
-{% endblock %}
+{% block title %} &middot; MeshCore Settings{% endblock %}
 {% block content %}
 {% with breadcrumb_label = 'MeshCore companion' %}{% include "_settings_breadcrumbs.html" %}{% endwith %}
 <div class="topbar">
@@ -145,9 +99,9 @@
   </section>
 {% endif %}
 <section class="panel">
-  <details id="companion-console"><summary>Companion command console</summary>
-    <p class="hint">Commands: help; info; channels; stats core|radio|packets; path-hash [1|2|3]; name &lt;name&gt;; tx-power &lt;dBm&gt;; radio &lt;MHz&gt; &lt;kHz&gt; &lt;SF&gt; &lt;CR&gt;.</p>
-    <p class="hint">Native CLI: {{ 'Available' if device and device.get('cli_supported') else 'Unavailable or not reported (requires companion protocol 14+)' }}. Use cli &lt;firmware command&gt; for firmware-specific commands. Command history stays in this page until refreshed; sensitive output is hidden.</p>
+  <details id="companion-console"><summary>MeshCore CLI console</summary>
+    <p class="hint">Standard commands: ver; infos; get radio; get name; get stats_packets; set name &quot;My node&quot;; set radio 915,250,10,5. Run help, get help or set help for supported commands. These standard commands do not require native firmware CLI support. Quote names and messages containing spaces.</p>
+    <p class="hint">Native firmware CLI: {{ 'Available' if device and device.get('cli_supported') else 'Unavailable or not reported (requires companion protocol 14+)' }}. Use cli &lt;firmware command&gt; for firmware-specific commands. One command per submission. Interactive sessions, scripts, pipelines, file operations and background subscriptions require a local meshcore-cli terminal. History stays in this page until refreshed; sensitive output is hidden.</p>
     <form id="console-form"><label for="console-command">Command</label><input id="console-command" maxlength="200" autocomplete="off" required list="console-history"><datalist id="console-history"></datalist><button id="console-run" type="submit">Run</button><button id="console-clear" type="button" class="secondary">Clear output</button></form>
     <pre id="console-output" role="log" aria-live="polite" style="max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
   </details>
@@ -174,7 +128,7 @@
         }
       }
       input.value = '';
-      if (result.ok && /^(cli|name|radio|tx-power|path-hash\s)/.test(command)) {
+      if (result.ok && /^\.?(cli|set\b|set_channel\b|remove_channel\b|name|radio|tx-power|path-hash\s)/.test(command)) {
         const page = await fetch('/meshcore/settings');
         if (page.ok) {
           const updated = new DOMParser().parseFromString(await page.text(), 'text/html');

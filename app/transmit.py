@@ -462,6 +462,35 @@ class MeshCoreTransmitter(Transmitter):
         return re.sub(r"(?i)\b[0-9a-f]{32,}\b", "[key hidden]", text)[:8192]
 
     async def execute_console(self, command: str) -> str:
+        from .companion_cli import execute, parse
+        if not command.strip():
+            raise ValueError("Enter a command")
+        shortcuts = ("info", "channels", "stats", "path-hash", "name", "tx-power", "radio")
+        if command.strip().split(None, 1)[0] in shortcuts:
+            return await self._legacy_console(command)
+        words, help_output = parse(command)
+        if help_output is not None:
+            return help_output
+        if not self.connected:
+            raise RuntimeError("MeshCore radio is offline")
+        name = words[0].lstrip(".")
+        if name == "cli":
+            from meshcore import EventType
+            info = await self._mc.commands.send_device_query()
+            if info.type != EventType.DEVICE_INFO or (info.payload or {}).get("fw ver", 0) < 14 or not callable(getattr(self._mc.commands, "run_cli_command", None)) or not hasattr(EventType, "CLI_REPLY"):
+                raise RuntimeError("Native CLI unsupported; requires companion protocol 14+ and a compatible SDK")
+        changed = name in ("cli", "set", "set_channel", "remove_channel", "reboot")
+        if changed:
+            self._sender_name = None
+        result = await execute(self._mc, command)
+        if changed and name != "reboot":
+            from meshcore import EventType
+            info = await self._mc.commands.send_appstart()
+            if info.type == EventType.SELF_INFO:
+                self._sender_name = (info.payload or {}).get("name")
+        return result
+
+    async def _legacy_console(self, command: str) -> str:
         import json
         import shlex
         from meshcore import EventType
@@ -495,24 +524,6 @@ class MeshCoreTransmitter(Transmitter):
             return f"Verified TX power: {await self.set_tx_power(int(words[1]))} dBm"
         if words[0] == "radio" and len(words) == 5:
             return json.dumps(await self.set_radio_parameters(float(words[1]), float(words[2]), int(words[3]), int(words[4])))
-        if words[0] == "cli" and len(words) >= 2:
-            info = await self._mc.commands.send_device_query()
-            method = getattr(self._mc.commands, "run_cli_command", None)
-            if info.type != EventType.DEVICE_INFO or (info.payload or {}).get("fw ver", 0) < 14 or not callable(method) or not hasattr(EventType, "CLI_REPLY"):
-                raise RuntimeError("Native CLI unsupported; requires companion protocol 14+ and a compatible SDK")
-            self._sender_name = None
-            result = await method(command.strip().split(None, 1)[1])
-            self._channel_result(result, EventType.CLI_REPLY, "Companion CLI")
-            # A native command may change the sender used for repeat matching.
-            self._sender_name = None
-            refreshed = await self._mc.commands.send_appstart()
-            if refreshed.type == EventType.SELF_INFO:
-                self._sender_name = (refreshed.payload or {}).get("name")
-            text = (result.payload or {}).get("text", "") or "Command completed without output"
-            import re
-            if re.match(r"(?i)^(error\b|err\b|unknown command|invalid command|unsupported|unrecognized)", text.strip()):
-                raise RuntimeError(self.redact_console(text))
-            return text
         raise ValueError("Unknown command or arguments. Run help for supported commands")
 
     async def set_device_name(self, name: str) -> str:
@@ -953,7 +964,7 @@ class TransmitManager:
             radio = self._saved_radio()
             try:
                 output = await asyncio.wait_for(radio.execute_console(command), 15)
-                if command.strip().split(None, 1)[0] == "cli":
+                if command.strip().split(None, 1)[0].lstrip(".") in ("cli", "set", "set_channel", "remove_channel"):
                     try:
                         await asyncio.wait_for(self._refresh_saved_channels(), 5)
                     except (RuntimeError, TimeoutError):

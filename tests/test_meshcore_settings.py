@@ -929,7 +929,7 @@ def test_console_web_routes_escape_output_and_path_hash_redirect():
     radio.execute_companion_command = execute
     radio.set_path_hash_bytes = set_hash
     page = client.get('/meshcore/settings')
-    assert 'Companion command console' in page.text
+    assert 'MeshCore CLI console' in page.text
     assert 'console-history' in page.text
     response = client.post('/meshcore/settings/console', data={'command': 'info'})
     assert response.json()['ok']
@@ -968,7 +968,7 @@ def test_path_hash_selector_displays_current_value_and_capabilities():
     radio.get_device_settings = settings
     page = client.get('/meshcore/settings')
     assert 'value="2" selected' in page.text
-    assert 'Native CLI: Available' in page.text
+    assert 'Native firmware CLI: Available' in page.text
     async def invalid(size):
         raise ValueError('Path hash size must be 1, 2, or 3 bytes per hop')
     radio.set_path_hash_bytes = invalid

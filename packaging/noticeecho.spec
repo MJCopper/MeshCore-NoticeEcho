@@ -13,7 +13,7 @@ binaries = []
 hiddenimports = collect_submodules("app")
 
 # These libraries load submodules / data files dynamically, so sweep them whole.
-for pkg in ("meshcore", "uvicorn", "tzdata"):
+for pkg in ("meshcore", "meshcore_cli", "prompt_toolkit", "requests", "uvicorn", "tzdata"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
