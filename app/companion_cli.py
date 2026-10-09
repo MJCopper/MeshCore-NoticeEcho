@@ -12,7 +12,7 @@ import shlex
 GET_PARAMS = frozenset("name tx coords lat lon radio repeat path_hash_mode path.hash.mode bat fstats multi_acks manual_add_contacts autoadd_config telemetry_mode_base telemetry_mode_loc telemetry_mode_env advert_loc_policy custom stats_core stats_radio stats_packets stats status allowed_repeat_freq default_scope".split())
 SET_PARAMS = frozenset("pin radio path_hash_mode path.hash.mode name tx lat lon coords tuning manual_add_contacts autoadd_config multi_acks telemetry_mode_base telemetry_mode_loc telemetry_mode_env advert_loc_policy default_scope".split())
 # Argument counts exclude the command itself; no command chaining is accepted.
-ARITIES = {**dict.fromkeys("ver query v q infos i clock self_telemetry t advert a floodadv flood_advert get_channels gc reboot contacts list lc reload_contacts rc pending_contacts recv r sync_msgs sm".split(), (0,)),
+ARITIES = {**dict.fromkeys("ver query v q infos i clock st sync_time self_telemetry t advert a floodadv flood_advert get_channels gc reboot contacts list lc reload_contacts rc pending_contacts recv r sync_msgs sm".split(), (0,)),
            **dict.fromkeys("get_channel remove_channel scope time contact_info ci export_contact ec share_contact sc remove_contact".split(), (1,)),
            "set_channel": (3,), "chan": (2,), "ch": (2,), "public": (1,), "dch": (1,), "msg": (2,), "m": (2,)}
 LIMITS = "One command per submission. Interactive sessions, scripts, shell pipelines/redirection, host-file operations, aliases and background subscriptions require a local meshcore-cli terminal. Quote names/messages containing spaces."

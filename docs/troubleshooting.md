@@ -58,3 +58,7 @@ To reduce duplicate reception, leave **Retry unconfirmed transmissions once** of
 ### Physical companion checks
 
 Automated tests simulate SDK responses and exercise the SDK packet parser; they cannot measure your radio or local network. On the test environment, verify a controlled multipart notice with retry disabled: both parts should arrive even if statistics are unavailable. Check that heard repeats change the correct part to **Repeat confirmed**. Repeat with the optional retry enabled and verify at most one duplicate of an unconfirmed part, ordered before the next part. Confirm that late repeats suppress retries and that reconnecting does not lose tracking. Choose timeout/delay values using the observed timings in the Transmit Log.
+
+### Companion clock verification on a physical device
+
+Compare `clock` with server time, introduce an offset with `time <epoch>`, and verify `clock sync` reads back the correction. Repeat with automatic synchronization enabled, then reboot and reconnect the companion through USB/TCP. Confirm a periodic correction and check that a multipart notice completes while a clock operation is due. Test failure recovery and verify diagnostics do not claim success without readback or cause duplicate notice transmissions. Automatic synchronization requires a correct server clock; daylight saving is a display concern. Physical-device validation is separate from automated protocol/scheduler tests.

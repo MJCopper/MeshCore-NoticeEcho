@@ -584,16 +584,24 @@ async def save_meshcore_connection(request: Request, meshcore_conn: str = Form("
                                    meshcore_confirmation_seconds: float = Form(5.0),
                                    meshcore_retry_unconfirmed: str = Form(""),
                                    meshcore_retry_delay_seconds: float = Form(5.0),
-                                   meshcore_late_repeat_seconds: float = Form(60.0)):
+                                   meshcore_late_repeat_seconds: float = Form(60.0),
+                                   meshcore_clock_auto_sync: str = Form(""),
+                                   meshcore_clock_interval_minutes: float = Form(60),
+                                   meshcore_clock_tolerance_seconds: float = Form(5)):
     import math
     for label, value, low, high in (
         ("Confirmation wait", meshcore_confirmation_seconds, 1, 30),
         ("Retry delay", meshcore_retry_delay_seconds, 1, 30),
         ("Late repeat tracking", meshcore_late_repeat_seconds, 10, 300),
+        ("Clock interval (minutes)", meshcore_clock_interval_minutes, 1, 1440),
+        ("Clock tolerance", meshcore_clock_tolerance_seconds, 1, 300),
     ):
         if not math.isfinite(value) or not low <= value <= high:
-            raise HTTPException(422, f"{label} must be between {low} and {high} seconds")
+            unit = "minutes" if label.startswith("Clock interval") else "seconds"
+            raise HTTPException(422, f"{label} must be between {low} and {high} {unit}")
     db = _db(request)
+    connection_keys = ("meshcore_enabled", "meshcore_conn", "meshcore_port", "meshcore_host", "meshcore_channel", "meshcore_test_channel", "meshcore_repeat_detection", "meshcore_confirmation_seconds", "meshcore_retry_unconfirmed", "meshcore_retry_delay_seconds", "meshcore_late_repeat_seconds")
+    before = tuple(db.get_setting(key) for key in connection_keys)
     db.set_setting("meshcore_enabled", True)
     db.set_setting("meshcore_conn", meshcore_conn if meshcore_conn in ("serial", "tcp") else "serial")
     db.set_setting("meshcore_port", meshcore_port.strip())
@@ -605,7 +613,14 @@ async def save_meshcore_connection(request: Request, meshcore_conn: str = Form("
     db.set_setting("meshcore_retry_unconfirmed", bool(meshcore_retry_unconfirmed))
     db.set_setting("meshcore_retry_delay_seconds", meshcore_retry_delay_seconds)
     db.set_setting("meshcore_late_repeat_seconds", meshcore_late_repeat_seconds)
-    await _tx(request).reconfigure()
+    db.set_setting("meshcore_clock_auto_sync", bool(meshcore_clock_auto_sync))
+    db.set_setting("meshcore_clock_interval_minutes", meshcore_clock_interval_minutes)
+    db.set_setting("meshcore_clock_tolerance_seconds", meshcore_clock_tolerance_seconds)
+    tx = _tx(request)
+    if before == tuple(db.get_setting(key) for key in connection_keys) and hasattr(tx, "clock_settings_changed"):
+        tx.clock_settings_changed()
+    else:
+        await tx.reconfigure()
     db.add_event("INFO", "MeshCore connection and transmission policy saved")
     return RedirectResponse("/settings/meshcore", status_code=303)
 
@@ -756,7 +771,7 @@ async def meshcore_settings_page(request: Request, saved: str = ""):
         error = str(exc)
     saved_labels = {"name": "Device name", "channel": "Channel name",
                     "added": "Channel", "removed": "Channel removal",
-                    "power": "TX power", "radio": "Radio parameters", "path-hash": "Path hash size"}
+                    "power": "TX power", "radio": "Radio parameters", "path-hash": "Path hash size", "clock": "Clock check/synchronization"}
     return render(request, "meshcore_settings.html", device=device,
                   error=error, saved_label=saved_labels.get(saved, ""),
                   live_channel=int(_db(request).get_setting("meshcore_channel", 0)),
@@ -868,6 +883,19 @@ async def save_meshcore_path_hash(request: Request, size: int = Form(...)):
     except RuntimeError as exc:
         return await _device_edit_error(request, str(exc), 503)
     return RedirectResponse("/meshcore/settings?saved=path-hash", status_code=303)
+
+
+@router.post("/meshcore/settings/clock", response_class=HTMLResponse)
+async def meshcore_clock_action(request: Request, action: str = Form(...)):
+    if action not in ('check', 'sync'):
+        raise HTTPException(422, 'Choose check or sync')
+    try:
+        result = await _tx(request).check_companion_clock(force=action == 'sync')
+        if result['status'] in ('failed', 'unsupported', 'inconclusive'):
+            return await _device_edit_error(request, result['error'], 503)
+    except RuntimeError as exc:
+        return await _device_edit_error(request, str(exc), 503)
+    return RedirectResponse('/meshcore/settings?saved=clock', status_code=303)
 
 
 @router.post("/meshcore/settings/console")

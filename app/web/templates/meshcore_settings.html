@@ -19,6 +19,15 @@
   </div>
 {% endif %}
 {% if device %}
+  {% if device.get('clock') %}{% set clock = device.clock %}
+  <section class="panel"><h3>Companion clock</h3>
+    <p>Status: {{ clock.status }} · Automatic synchronization {{ 'enabled' if clock.automatic else 'disabled' }}</p>
+    <p>Server: {{ clock.server_time|localtime(tz) }}<br>Companion at last measurement: {{ clock.get('companion_time', '')|localtime(tz) }}</p>
+    {% if clock.get('drift_seconds') is not none %}<p>Estimated drift: {{ '%.2f'|format(clock.drift_seconds) }} seconds ±{{ '%.2f'|format(clock.uncertainty_seconds) }} seconds</p>{% endif %}
+    <p>Last check: {{ clock.get('last_check', '')|localtime(tz) }}<br>Last verified sync: {{ clock.get('last_sync', '')|localtime(tz) }}<br>Next check: {{ clock.next_check|localtime(tz) }}</p>
+    {% if clock.get('error') %}<p role="alert">{{ clock.error }}</p>{% endif %}
+    <form method="post" action="/meshcore/settings/clock"><button name="action" value="check">Check now</button> <button name="action" value="sync">Sync now</button></form>
+  </section>{% endif %}
   <section class="panel">
     <h3>Companion radio</h3>
     <div class="row">
@@ -128,7 +137,7 @@
         }
       }
       input.value = '';
-      if (result.ok && /^\.?(cli|set\b|set_channel\b|remove_channel\b|name|radio|tx-power|path-hash\s)/.test(command)) {
+      if (result.ok && /^\.?(clock|time|st\b|sync_time|cli|set\b|set_channel\b|remove_channel\b|name|radio|tx-power|path-hash\s)/.test(command)) {
         const page = await fetch('/meshcore/settings');
         if (page.ok) {
           const updated = new DOMParser().parseFromString(await page.text(), 'text/html');

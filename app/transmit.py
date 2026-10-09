@@ -70,6 +70,7 @@ class MeshCoreTransmitter(Transmitter):
         self.policy = TransmissionPolicy()
         self.repeat_tracker = RepeatTracker()
         self._subscriptions = []
+        self._clock_subscriptions = []
         self.counter_capability = "unknown"
         self.counter_error = ""
         self.counter_checked_at = None
@@ -308,9 +309,10 @@ class MeshCoreTransmitter(Transmitter):
                 "last_result": self.last_result.as_record() if self.last_result is not None else None}
 
     async def close(self) -> None:
-        for subscription in self._subscriptions:
+        for subscription in self._subscriptions + self._clock_subscriptions:
             subscription.unsubscribe()
         self._subscriptions.clear()
+        self._clock_subscriptions.clear()
         self.repeat_status = "not connected"
         self._sender_name = None
         if self._mc is not None:
@@ -811,6 +813,9 @@ class TransmitManager:
         self._connection_task: asyncio.Task | None = None
         self._reconnect_delay = 2.0
         self._stopped = False
+        from .companion_clock import ClockSync
+        self._clock = ClockSync(db)
+        self._clock_task = None
 
     def _restore_repeat_tracking(self):
         fetch = getattr(self._db, "tracking_transmissions", None)
@@ -840,10 +845,17 @@ class TransmitManager:
         self._stopped = False
         self._worker_task = asyncio.create_task(self._worker(), name="tx-worker")
         self._connection_task = asyncio.create_task(self._maintain_connections(), name="radio-connection")
+        self._clock_task = asyncio.create_task(self._maintain_clock(), name="companion-clock")
 
     async def stop(self) -> None:
         self._stopped = True
         self._queue_event.set()
+        if self._clock_task:
+            self._clock_task.cancel()
+            try:
+                await self._clock_task
+            except asyncio.CancelledError:
+                pass
         if self._connection_task:
             self._connection_task.cancel()
             try:
@@ -891,6 +903,34 @@ class TransmitManager:
             except Exception:
                 logger.exception("radio connection maintenance failed")
 
+    async def _maintain_clock(self):
+        while not self._stopped:
+            await asyncio.sleep(1)
+            if not self._clock.ready() or self._lock.locked() or self._active_notice is not None:
+                continue
+            try:
+                async with self._lock:
+                    if self._active_notice is None:
+                        await self._clock.check(self._saved_radio())
+            except RuntimeError:
+                # Offline: connection callbacks will request a check on recovery.
+                pass
+            except Exception:
+                logger.exception("companion clock maintenance failed")
+
+    def clock_settings_changed(self):
+        self._clock.request('clock settings changed')
+
+    def clock_status(self):
+        transport = self._transports['meshcore']
+        return self._clock.status(bool(transport.tx and transport.connected and transport.tx.connected))
+
+    async def check_companion_clock(self, force=False, target=None):
+        if self._lock.locked() or self._active_notice is not None:
+            raise RuntimeError("Companion busy; clock checks wait until the notice is complete")
+        async with self._lock:
+            return await self._clock.check(self._saved_radio(), force=force, target=target, read_only=not force and target is None)
+
     # ---- status / compat ------------------------------------------------
     @property
     def connected(self) -> bool:
@@ -923,6 +963,7 @@ class TransmitManager:
             {"name": t.name, "label": t.label, "enabled": t.enabled,
              "conn": t.conn, "connected": t.connected and t.tx is not None and t.tx.connected,
              "target": t.target, "channel": t.channel, "error": t.error,
+             "clock": self.clock_status(),
              "transmission": t.tx.transmission_diagnostics() if hasattr(t.tx, "transmission_diagnostics") else {},
              "policy": vars(TransmissionPolicy.from_settings(self._db.all_settings())) if hasattr(self._db, "all_settings") else vars(TransmissionPolicy())}
             for t in self._transports.values()
@@ -936,7 +977,9 @@ class TransmitManager:
 
     async def get_device_settings(self) -> dict:
         async with self._lock:
-            return await self._saved_radio().read_settings()
+            result = await self._saved_radio().read_settings()
+            result["clock"] = self.clock_status()
+            return result
 
     async def set_device_name(self, name: str) -> str:
         async with self._lock:
@@ -958,17 +1001,40 @@ class TransmitManager:
                 raise RuntimeError("Path hash operation timed out; refresh before retrying") from exc
 
     async def execute_companion_command(self, command: str) -> str:
-        if self._lock.locked():
+        import shlex
+        words = shlex.split(command)
+        if words and words[0].lstrip('.') in ('clock', 'time', 'st', 'sync_time'):
+            from .companion_cli import parse
+            parse(command)
+            name = words[0].lstrip('.')
+            target = int(words[1]) if name == 'time' else None
+            if target is not None and not 0 <= target <= 0xffffffff:
+                raise ValueError('Time must be a Unix timestamp between 0 and 4294967295')
+            result = await self.check_companion_clock(force=(name in ('st', 'sync_time') or words[1:] == ['sync']), target=target)
+            if result['status'] in ('failed', 'unsupported', 'inconclusive'):
+                raise RuntimeError(result['error'])
+            if target is not None and self._clock.policy()['enabled']:
+                result['note'] = 'Automatic synchronization will later restore server time; disable it to retain an explicit time'
+            if words[0].startswith('.'):
+                return json.dumps(dict(result, time=result['companion_epoch']))
+            return ('Current time: ' + result['companion_time'] + '\n' + result['status'] +
+                    f"; drift {result['drift_seconds']:.2f}s ±{result['uncertainty_seconds']:.2f}s" +
+                    ('\n' + result['note'] if result.get('note') else ''))
+        if self._lock.locked() or self._active_notice is not None:
             raise RuntimeError("Companion busy; wait for the current transmission or settings operation")
         async with self._lock:
             radio = self._saved_radio()
             try:
+                if command.strip().split(None, 1)[0].lstrip(".") in ("reboot", "cli"):
+                    self._clock.request("manual companion command")
                 output = await asyncio.wait_for(radio.execute_console(command), 15)
                 if command.strip().split(None, 1)[0].lstrip(".") in ("cli", "set", "set_channel", "remove_channel"):
                     try:
                         await asyncio.wait_for(self._refresh_saved_channels(), 5)
                     except (RuntimeError, TimeoutError):
                         output += "\nCommand completed, but channel cache refresh failed. Refresh settings before using changed channels."
+                if command.strip().split(None, 1)[0].lstrip(".") in ("reboot", "cli"):
+                    self._clock.request("manual companion command")
                 return radio.redact_console(output)
             except TimeoutError as exc:
                 raise RuntimeError("Command timed out; it may have applied. Refresh settings before retrying") from exc
@@ -1045,6 +1111,16 @@ class TransmitManager:
                 tx.repeat_tracker = self._repeat_tracker
             await tx.connect()
             t.tx, t.connected, t.error = tx, True, ""
+            if isinstance(tx, MeshCoreTransmitter):
+                self._clock.request('connection established')
+                from meshcore import EventType
+                async def clock_connection(event):
+                    if t.tx is tx:
+                        self._clock.request('SDK connection changed')
+                for event_type in (EventType.CONNECTED, EventType.DISCONNECTED):
+                    subscribe = getattr(tx._mc, "subscribe", None)
+                    if callable(subscribe):
+                        tx._clock_subscriptions.append(subscribe(event_type, clock_connection))
             return ""
         except Exception as exc:
             t.tx, t.connected = None, False

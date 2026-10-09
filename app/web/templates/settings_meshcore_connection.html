@@ -5,6 +5,12 @@
 <h2>MeshCore connection</h2>
 <p class="hint">Configure the companion connection and Live/Test channels. <a href="/meshcore/settings">Edit companion settings and channels</a>.</p>
 <form method="post" action="/settings/meshcore">
+  <div class="panel"><h3>Companion clock</h3>
+    <label class="chk"><input type="checkbox" name="meshcore_clock_auto_sync" value="1" {% if s.get('meshcore_clock_auto_sync', true) %}checked{% endif %}> Automatically synchronize companion clock</label>
+    <label>Check interval (minutes)</label><input name="meshcore_clock_interval_minutes" type="number" min="1" max="1440" value="{{ s.get('meshcore_clock_interval_minutes', 60) }}" required>
+    <label>Maximum acceptable drift (seconds)</label><input name="meshcore_clock_tolerance_seconds" type="number" min="1" max="300" value="{{ s.get('meshcore_clock_tolerance_seconds', 5) }}" required>
+    <p class="hint">Uses this server’s UTC clock. Checks after connection/reconnection and periodically, between complete notices. Ensure the server clock is correct. Clock failures do not fail or resend notices.</p>
+  </div>
   <div class="panel">
     <h3>MeshCore radio</h3>
     <div class="row" style="margin-top:12px;">

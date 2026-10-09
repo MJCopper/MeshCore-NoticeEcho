@@ -313,7 +313,9 @@ async def test_companion_read_waits_for_transmit_lock():
         task = asyncio.create_task(tx.get_device_settings())
         await asyncio.sleep(0)
         assert not task.done()
-    assert await task == {"name": "Safe"}
+    result = await task
+    assert result["name"] == "Safe"
+    assert result["clock"]["status"] == "not checked"
 
 
 @pytest.mark.asyncio
