@@ -1,6 +1,8 @@
 """Live Traffic NSW polling, history decisions, and MeshCore queueing."""
 from __future__ import annotations
 
+from ..notice_selection import evaluate, values_for, saved_values_for
+
 import asyncio
 import time
 import logging
@@ -199,8 +201,9 @@ class TrafficPoller:
                 return ""
             if not item.active():
                 return "ended or not yet active"
-            if item.feed not in types or ("ROADWORK" in item.category and "roadwork" not in types):
-                return "hazard type"
+            selection = evaluate("traffic", values_for("traffic", item), settings)
+            if not selection.included:
+                return selection.reason
             if not traffic_delivery_coverage(item, council, settings, self.db).included:
                 return "geography" if geographic_active(settings) else "council"
             return ""
@@ -302,8 +305,7 @@ class TrafficPoller:
                             and saved["revision_hash"] == event.revision
                             and traffic_delivery_coverage(saved_evidence(event, saved), matched_council, current, self.db).included
                             and (is_closure or (saved["active"] and event.active()
-                            and event.feed in current.get("traffic_types", [])
-                            and ("ROADWORK" not in event.category or "roadwork" in current.get("traffic_types", [])))))
+                            and evaluate("traffic", saved_values_for("traffic", event, saved), current).included)))
 
             if submit_notice(self.tx, [parts[i] for i in indices], on_result, priority=5,
                              valid_if=valid_if, delivery_context=(row_id, tuple(indices), len(parts))):
@@ -340,7 +342,7 @@ class TrafficPoller:
             "traffic", item.item_id, item.title or item.category, council,
             disposition=disposition, transmitted_text=text, detail=detail,
             transmit_status=status, revision_hash=item.revision,
-            metadata={"feed": item.feed, "category": item.category, "road": item.road,
+            metadata={"notice_selection": evaluate("traffic", values_for("traffic", item), settings).metadata(), "feed": item.feed, "category": item.category, "road": item.road,
                       "suburb": item.suburb, "direction": item.direction,
                       "impact": item.impact, "advice": item.advice,
                       "road_details": item.road_details, "source_url": SOURCE_URL,

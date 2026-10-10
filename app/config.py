@@ -83,6 +83,9 @@ BOM_USER_AGENT = (
 
 DEFAULT_SETTINGS: dict = {
     "geographic_policy": None,
+    "bom_notice_selection": None,
+    "rfs_notice_selection": None,
+    "traffic_notice_selection": None,
     "bom_enabled": True,
     "bom_all_councils": True,
     "bom_councils": [],

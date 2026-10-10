@@ -1,0 +1,29 @@
+<div class="panel" id="notice-selection"><h3>Notice selection</h3>
+<p class="hint">Notice selection and geographic coverage must both match. Preview uses saved notices without transmitting.</p>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+{% if saved %}<p>Selection saved. Completed notices are not automatically resent.</p>{% endif %}
+{% if active_policy %}<p class="hint">Catalogue {{ active_policy.catalogue.version }} · reviewed {{ policy.catalogue.reviewed }} · <a href="{{ policy.catalogue.source }}">Provider reference</a></p>{% endif %}
+{% if active_policy and active_policy.catalogue != latest %}<p>A reviewed catalogue update is available. Preview explicit adoption to inspect reclassification before saving. Your active catalogue remains in use until saved.</p>{% endif %}
+{% if not active_policy %}<p>Existing rules are active. Preview and apply the new settings below.</p>{% endif %}
+<form method="post" action="/settings/notices/{{ service }}">
+{% if active_policy and active_policy.catalogue != latest %}
+<label>Catalogue <select name="catalogue"><option value="active">Keep displayed catalogue version {{ policy.catalogue.version }}</option><option value="latest" {% if policy.catalogue == latest %}selected{% endif %}>Adopt current catalogue version {{ latest.version }} explicitly</option></select></label>
+{% else %}<input type="hidden" name="catalogue" value="{{ 'active' if active_policy else 'latest' }}">{% endif %}
+<label>Find classifications <input type="search" id="classification-search" placeholder="Type a name or provider variant"></label>
+{% for dim, entries in policy.catalogue.dimensions.items() %}
+<section><h4>{{ {'type':'Notice type','level':'Alert level','kind':'Incident type','category':'Category'}[dim] }}</h4>
+<label><select name="{{ dim }}_mode"><option value="all" {% if policy.dimensions[dim].mode == 'all' %}selected{% endif %}>All (including future, unrecognized and not supplied)</option><option value="selected" {% if policy.dimensions[dim].mode == 'selected' %}selected{% endif %}>Selected classifications only</option></select></label>
+{% for group, grouped in entries|groupby('family') %}<fieldset><legend>{{ group }}</legend>
+{% for entry in grouped %}{% set obs = observations[dim][entry.id] %}
+<div class="notice-option"><label class="chk"><input type="checkbox" name="{{ dim }}_selected" value="{{ entry.id }}" {% if entry.id in policy.dimensions[dim].selected %}checked{% endif %}> {{ entry.label }}</label>
+<p class="hint">{{ obs.current }} current · {{ obs.observed }} observed distinct notices{% if not obs.observed %} · Catalogue only{% endif %}. {{ entry.description }}</p>
+{% if entry.aliases %}<p class="hint">Reviewed variants: {{ entry.aliases|join(" · ") }}</p>{% endif %}
+{% if obs.examples %}<details><summary>Provider labels and variants</summary>{{ obs.examples|join(' · ') }}</details>{% endif %}</div>
+{% endfor %}</fieldset>{% endfor %}</section>{% endfor %}
+<button name="action" value="preview">Preview without saving</button> <button name="action" value="save">{{ "Save selection" if active_policy else "Apply new settings" }}</button>
+</form>
+{% if preview %}<h3>Preview of saved current notices</h3><p>{{ comparisons|length }} notices evaluated. Geography is unchanged. A selection match does not imply a new transmission: completed deliveries remain deduplicated.</p>
+<table><thead><tr><th>Notice</th><th>Before → proposed eligibility</th><th>Classification and other reasons</th></tr></thead><tbody>
+{% for item in comparisons %}<tr><td>{{ item.title }}{% if item.changed %}<br><b>Changed</b>{% endif %}</td><td>{{ 'Eligible' if item.old_ok else 'Excluded' }} → {{ 'Eligible' if item.new_ok else 'Excluded' }}</td><td>{{ item.after.reason }}{% for blocker in item.blockers %}<br>{{ blocker }}{% endfor %}{% if item.closure %}<br>Previously transmitted closure bypasses classification selection{% endif %}{% for dim, classified in item.after.dimensions.items() %}<br>{{ dim }}: {{ item.before.dimensions[dim].label }} → {{ classified.label }} · raw: {{ classified.raw or 'Not supplied' }}{% if classified.qualifier %} · qualifier: {{ classified.qualifier }}{% endif %}{% if classified.subtype %} · {{ classified.subtype }}{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody></table>{% endif %}
+<script>document.getElementById('classification-search').addEventListener('input', function () {const query=this.value.toLowerCase();document.querySelectorAll('.notice-option').forEach(function(option){option.hidden=!option.textContent.toLowerCase().includes(query);});});</script>
+</div>

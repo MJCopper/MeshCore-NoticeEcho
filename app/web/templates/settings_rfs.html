@@ -1,26 +1,16 @@
 {% extends "base.html" %}
-{% block title %} &middot; NSW RFS settings{% endblock %}
+{% block title %} · NSW RFS settings{% endblock %}
 {% block content %}
 {% with breadcrumb_label = 'NSW RFS' %}{% include "_settings_breadcrumbs.html" %}{% endwith %}
 <h2>NSW RFS settings</h2>
-<p class="hint"><a href="/rfs">View current incidents</a> · <a href="/history?source=rfs">View RFS history</a></p>
+<p class="hint"><a href="/rfs">View current notices</a> · <a href="/history?source=rfs">View history</a></p>
 {% include "_geographic_summary.html" %}
-<form method="post" action="/settings/rfs">
-  <div class="panel">
-    <h3>RFS broadcast settings</h3>
-    <label class="chk"><input type="checkbox" name="rfs_enabled" value="1" {% if s.rfs_enabled %}checked{% endif %}> Enable NSW RFS monitoring</label>
-    <p class="hint">Uses the same Live MeshCore channel and Dry Run setting as BOM. Council selection applies to every alert level, including Emergency Warning.</p>
-    <div class="grp-title">Alert levels to broadcast</div>
-    <div class="checkgrid">
-      {% for level in levels %}<label class="chk"><input type="checkbox" name="rfs_levels" value="{{ level }}" {% if level in selected_levels %}checked{% endif %}> {{ level }}</label>{% endfor %}
-    </div>
-  </div>
-  <div class="panel">
-    <h3>RFS polling</h3>
-    <label>Poll interval (minutes, minimum 5)</label>
-    <input name="rfs_poll_minutes" type="number" min="5" value="{{ s.rfs_poll_minutes }}" required>
-  </div>
-  <button type="submit">Save RFS settings</button>
+<form id="service-settings" method="post" action="/settings/rfs">
+<input type="hidden" name="preserve_notice_selection" value="1">
+<div class="panel"><h3>Monitoring</h3><label class="chk"><input type="checkbox" name="rfs_enabled" value="1" {% if s.rfs_enabled %}checked{% endif %}> Enable NSW RFS monitoring</label></div>
 </form>
-{% include "_council_choices_script.html" %}
+{% include "_notice_selection_settings.html" %}
+<div class="panel"><h3>Polling</h3><label>Poll interval (minutes, minimum 5)</label>
+<input form="service-settings" name="rfs_poll_minutes" type="number" min="5" value="{{ s.rfs_poll_minutes }}" required>
+<button form="service-settings" type="submit">Save monitoring and polling</button></div>
 {% endblock %}

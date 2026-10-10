@@ -1,6 +1,8 @@
 """BOM polling background task."""
 from __future__ import annotations
 
+from .notice_selection import evaluate, values_for
+
 import asyncio
 import time
 from dataclasses import asdict
@@ -202,6 +204,7 @@ class BomPoller:
                                       if alert.event == "Marine Wind Warning" else ())
             alert.effective = getattr(enrichment, "issued", "") or alert.effective
             alert.expires = getattr(enrichment, "expires", "") or alert.expires
+        item["notice_selection"] = evaluate("bom", values_for("bom", alert), settings).metadata()
         item["_enrichment"] = asdict(enrichment) if isinstance(enrichment, BOMEnrichment) else {}
         item.update(effective=alert.effective, expires=alert.expires)
         item["enrichment_status"] = (getattr(enrichment, "status", "") or
@@ -216,6 +219,8 @@ class BomPoller:
         if not self._db.get_setting("bom_enabled", True):
             return False
         decision = decide(alert, rules, self._db.get_state)
+        if decision.disposition == "filtered" and not item["notice_selection"]["included"] and alert.message_type != "Cancel":
+            decision = Decision("filtered", False, item["notice_selection"]["reason"])
         if geographic_active(settings):
             settings = dict(settings)
             policy = settings[GEOGRAPHIC_KEY]
@@ -247,7 +252,7 @@ class BomPoller:
         if geographic_active(settings) and previous_meta.get("geographic_policy"):
             old_settings[GEOGRAPHIC_KEY] = previous_meta["geographic_policy"]
         expanded = geography.included and previous_meta and (
-            previous_meta.get("selection") == "excluded"
+            (previous_meta.get("selection") == "excluded" and previous_meta.get("notice_selection", {}).get("included", True))
             or not match_geography(alert, match, old_settings, enrichment).included)
         # Keep the existing behaviour of reconsidering a warning when another
         # affected council/district is newly selected, without repeating it later.
@@ -337,7 +342,11 @@ class BomPoller:
                                  and latest["transmit_status"] == "dry-run"
                                  and latest["revision_hash"] == revision_hash
                                  and latest["transmitted_text"] != logged_text)
-        if refreshed_preview or (force and decision.transmit and not retry_existing) or latest is None or latest["revision_hash"] != revision_hash or (
+        newly_eligible = bool(decision.transmit and latest is not None and latest["transmit_status"] is None)
+        selection_changed = bool(not decision.transmit and latest is not None and (
+            previous_meta.get("selection") != selection or
+            previous_meta.get("notice_selection", {}).get("dimensions") != item["notice_selection"]["dimensions"]))
+        if refreshed_preview or newly_eligible or selection_changed or (force and decision.transmit and not retry_existing) or latest is None or latest["revision_hash"] != revision_hash or (
                 decision.transmit and not dry_run and not retry_existing
                 and latest["transmit_status"] in ("failed", "interrupted", "deferred")):
             detail = decision.detail + area_detail
@@ -353,7 +362,7 @@ class BomPoller:
                 alert.alert_id, alert.event, alert.area_desc, disposition,
                 history_text, detail, transmit_status=transmit_status,
                 revision_hash=revision_hash,
-                metadata={"region": "NSW", "council_match": match.status,
+                metadata={"notice_selection": item["notice_selection"], "provider_classification": {key: getattr(enrichment, key, "") for key in ("severity", "urgency", "certainty")}, "region": "NSW", "council_match": match.status,
                           "matched_councils": list(match.councils),
                           "match_method": match.method, "selection": selection,
                           "match_reason": match.reason, "enrichment_status": item["enrichment_status"],

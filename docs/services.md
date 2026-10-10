@@ -2,6 +2,8 @@
 
 [Back to installation and setup](../README.md).
 
+Notice classifications are configured through **Settings → Notice selection**. See [selection and migration](notice-selection.md) and [the collected-data audit](notice-selection-audit.md).
+
 ## BOM current warnings
 
 BOM, RFS and Live Traffic NSW each have their own enable control and polling interval in minutes (minimum 5). Their geographic coverage is configured together on **Settings → Geographic Coverage** (`/settings/geography`). Coverage uses **All NSW OR selected council OR additional location term**. Other service filters still apply. Source pages show geographic decisions and match evidence; broadcast History remains separate.

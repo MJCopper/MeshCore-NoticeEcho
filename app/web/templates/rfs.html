@@ -19,7 +19,7 @@
     {% if i.data.size %}<br>Reported size: {{ i.data.size }}{% endif %}{% if i.data.agency %}<br>Agency: {{ i.data.agency }}{% endif %}
     {% if i.updated %}<br><span class="hint">Provider updated: {{ i.updated }} (timezone unverified)</span>{% endif %}
     {% if i.data.published_raw %}<br><span class="hint">Provider publication: {{ i.data.published_raw }} (timezone unverified)</span>{% endif %}
-    <br><span class="hint">Observed {{ i.last_seen|localtime(tz) }}</span></td><td>{{ i.council or 'Unknown' }}<br><span class="hint">Provider council name; incident footprint not established</span>{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td><td>{{ i.status }}</td></tr>{% endfor %}
+    <br><span class="hint">Observed {{ i.last_seen|localtime(tz) }}</span></td><td>{{ i.council or 'Unknown' }}<br><span class="hint">Provider council name; incident footprint not established</span>{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with notice = i.notice %}{% include "_notice_evidence.html" %}{% endwith %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td><td>{{ i.status }}</td></tr>{% endfor %}
   </tbody></table>
   {% include "_current_pagination.html" %}
   {% else %}<p class="hint">No current incidents have been loaded. The RFS feed is checked when monitoring is enabled.</p>{% endif %}

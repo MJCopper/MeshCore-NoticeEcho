@@ -27,7 +27,7 @@
     {% if i.data.updated %}<p class="hint">Provider updated {{ i.data.updated|epochlocal(tz) }}</p>{% endif %}
     {% if i.data.start %}<p class="hint">Notice starts {{ i.data.start|epochlocal(tz) }}</p>{% endif %}
     {% if i.data.end and not i.data.hide_end %}<p class="hint">Notice ends {{ i.data.end|epochlocal(tz) }}</p>{% endif %}
-  </td><td>{{ i.council or 'Unmatched' }}<br><span class="hint">{{ i.data.match_method or 'Method not recorded' }}</span>{% if i.data.match_reason %}<p class="hint">{{ i.data.match_reason }}</p>{% endif %}{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td>
+  </td><td>{{ i.council or 'Unmatched' }}<br><span class="hint">{{ i.data.match_method or 'Method not recorded' }}</span>{% if i.data.match_reason %}<p class="hint">{{ i.data.match_reason }}</p>{% endif %}{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with notice = i.notice %}{% include "_notice_evidence.html" %}{% endwith %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td>
   <td>{{ 'Current notice at last observation' if i.current_now else 'Ended, future or absent notice' }}{% if i.missing_polls %}<br>Absent from {{ i.missing_polls }} successful feed poll(s); road status unconfirmed{% endif %}
     <p class="hint">{{ i.closure_state }}</p><p class="hint">{{ i.freshness }} · Observed {{ i.last_seen|localtime(tz) }}</p></td></tr>{% endfor %}
   </tbody></table>

@@ -104,6 +104,8 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(title="Meshcore NoticeEcho", lifespan=lifespan)
     from .web.geography_routes import router as geography_router
+    from .web.notice_routes import router as notice_router
+    app.include_router(notice_router)
     app.include_router(geography_router)
     app.include_router(router)
     app.include_router(rfs_router)

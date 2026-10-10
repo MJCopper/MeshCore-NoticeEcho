@@ -2,12 +2,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.web.routes import router
+from app.db import Database
 
 
-class FakeDB:
+class FakeDB(Database):
     def __init__(self, settings=None):
         self._settings = dict(settings or {})
         self.events = []
+        super().__init__(":memory:")
 
     def all_settings(self):
         return dict(self._settings)
@@ -317,19 +319,20 @@ def test_saving_settings_forces_meshcore_enabled():
     assert db.get_setting("meshcore_test_channel") == 5
 
 
-def test_all_warnings_disables_only_warning_product_choices():
-    import re
-
-    client, _, _ = _client({
+def test_bom_service_page_replaces_legacy_warning_controls_with_family_selection():
+    client, db, _ = _client({
         "filter_include_exact": ["Marine Wind Warning", "Flood Watch"],
         "filter_include_suffix": ["Warning"],
     })
+    before=db.all_settings()
     body = client.get("/settings/bom").text
-    assert 'id="warning-products" class="warning-products is-disabled" aria-disabled="true"' in body
-    assert re.search(r'value="Marine Wind Warning" checked disabled', body)
-    assert re.search(r'value="Flood Watch" checked>', body)
-    assert "Included automatically by All BOM warning products" in body
-    assert "allWarnings.addEventListener('change', updateWarningChoices)" in body
+    assert 'name="type_mode"' in body
+    assert 'value="marine-wind-warning" checked' in body
+    assert 'value="flood-watch" checked' in body
+    assert 'Existing rules are active' in body
+    assert 'name="all_warnings"' not in body
+    assert 'id="warning-products"' not in body
+    assert db.all_settings()==before
 
 
 def test_warning_product_choices_survive_all_warnings_save():

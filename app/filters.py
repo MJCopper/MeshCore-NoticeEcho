@@ -16,6 +16,7 @@ class FilterRules:
     include_exact: list[str]
     include_suffix: list[str]
     exclude_exact: list[str]
+    notice_policy: dict | None = None
 
     @classmethod
     def from_settings(cls, settings: dict) -> "FilterRules":
@@ -23,6 +24,7 @@ class FilterRules:
             include_exact=list(settings.get("filter_include_exact", [])),
             include_suffix=list(settings.get("filter_include_suffix", [])),
             exclude_exact=list(settings.get("filter_exclude_exact", [])),
+            notice_policy=settings.get("bom_notice_selection"),
         )
 
 
@@ -38,6 +40,9 @@ def _matches_product(event: str, product: str) -> bool:
 
 def should_include(event: str, rules: FilterRules) -> bool:
     """Return True if an alert with this event name should be broadcast."""
+    if rules.notice_policy:
+        from .notice_selection import evaluate
+        return evaluate("bom", {"type": event}, {"bom_notice_selection": rules.notice_policy}).included
     event = (event or "").strip()
     if not event:
         return False

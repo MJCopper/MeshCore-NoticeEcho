@@ -1,6 +1,8 @@
 """Independent NSW RFS poller, council filter, history and alert queueing."""
 from __future__ import annotations
 
+from ..notice_selection import evaluate, values_for
+
 import asyncio
 import time
 import logging
@@ -10,7 +12,7 @@ from ..config import FINAL_VERIFICATION_MESSAGE, MAX_PAYLOAD_BYTES, VERIFICATION
 from ..brief import brief_parts, NoticeTooLong
 from ..formatter import compact_topic
 from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice
-from .feed import LEVELS, RFSClient, RFSFeedError, council_key
+from .feed import RFSClient, RFSFeedError, council_key
 from .councils import COUNCILS
 from ..geography import incident_delivery_coverage, saved_evidence, active as geographic_active
 
@@ -122,7 +124,6 @@ class RFSPoller:
             return
         self.last_poll = now
         self.last_result = f"ok: {len(incidents)} RFS incidents"
-        levels = set(settings.get("rfs_levels", [])) & set(LEVELS)
         budget = getattr(self.tx, "message_budget", MAX_PAYLOAD_BYTES)
         dry_run = bool(settings.get("dry_run", True))
         queued = False
@@ -136,7 +137,8 @@ class RFSPoller:
                 self.db.rfs_save_incident(incident, incident.revision)
             coverage = incident_delivery_coverage(incident, settings, self.db)
             closing = coverage.method == "previous transmission"
-            reason = ("alert level" if incident.level not in levels else
+            selection = evaluate("rfs", values_for("rfs", incident), settings)
+            reason = (selection.reason if not selection.included else
                       ("geography" if geographic_active(settings) else "council") if not coverage.included else "")
             if closing:
                 reason = ""
@@ -204,7 +206,7 @@ class RFSPoller:
                 return bool(current.get("rfs_enabled") and saved and saved["missing_polls"] < 2
                             and saved["revision_hash"] == item.revision
                             and incident_delivery_coverage(saved_evidence(item, saved), current, self.db).included
-                            and (is_closing or item.level in current.get("rfs_levels", [])))
+                            and (is_closing or evaluate("rfs", values_for("rfs", item), current).included))
 
             if submit_notice(self.tx, [parts[i] for i in indices], on_result,
                              priority=0 if incident.level == "Emergency Warning" else 2,

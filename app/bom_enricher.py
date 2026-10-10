@@ -28,6 +28,9 @@ class BOMEnrichment:
     lga_names: tuple[str, ...] = ()
     status: str = ""
     geocodes: tuple[tuple[str, str, str], ...] = ()
+    severity: str = ""
+    urgency: str = ""
+    certainty: str = ""
 
 
 @dataclass(frozen=True)
@@ -185,7 +188,10 @@ def parse_warning_api(payload: dict) -> BOMEnrichment:
                          expires=str(warning.get("expires_datetime_utc") or ""),
                          lga_names=tuple(lga_names) if not untyped_footprint else (),
                          status="available" if warning else "unavailable",
-                         geocodes=tuple(geographic_codes))
+                         geocodes=tuple(geographic_codes),
+                         severity=str(warning.get("severity") or next((i.get("severity") for i in info if i.get("severity")), "")),
+                         urgency=str(warning.get("urgency") or next((i.get("urgency") for i in info if i.get("urgency")), "")),
+                         certainty=str(warning.get("certainty") or next((i.get("certainty") for i in info if i.get("certainty")), "")))
 
 
 def _warning_api_url(url: str) -> str:

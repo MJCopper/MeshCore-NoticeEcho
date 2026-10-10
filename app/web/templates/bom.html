@@ -25,7 +25,7 @@
       {% if item.matched_districts %}<p class="hint">Forecast district match: {{ item.matched_districts|join(", ") }}</p>{% endif %}
       {% if item.match_method %}<br>{{ item.match_method }}{% endif %}
       {% if item.match_reason %}<p class="hint">{{ item.match_reason }}</p>{% endif %}
-      {% if item.coverage %}<p class="hint">{{ item.coverage.reason }}</p>{% endif %}{% with coverage = item.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}{% if item.selection %}<br>{{ item.selection }}{% endif %}{% if item.selection_reason %}<br><span class="hint">{{ item.selection_reason }}</span>{% endif %}</td>
+      {% if item.coverage %}<p class="hint">{{ item.coverage.reason }}</p>{% endif %}{% with notice = item.notice %}{% include "_notice_evidence.html" %}{% endwith %}{% with coverage = item.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}{% if item.selection %}<br>{{ item.selection }}{% endif %}{% if item.selection_reason %}<br><span class="hint">{{ item.selection_reason }}</span>{% endif %}</td>
     <td>{% if item.issued %}{{ item.issued|localtime(tz) }}{% else %}Not supplied{% endif %}</td>
     <td>{{ 'Cancellation' if item.message_type == 'Cancel' else 'Warning' }}{% if item.expires %}<br><span class="hint">Expires {{ item.expires|localtime(tz) }}</span>{% endif %}
       <br><span class="hint">Detail enrichment: {{ item.enrichment_status }}{% if item.enrichment_status == 'unavailable' %} — using RSS detail; council footprint may be unknown{% endif %}</span></td>

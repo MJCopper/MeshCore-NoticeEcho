@@ -71,6 +71,8 @@ class TrafficItem:
     additional_info: str = ""
     state: str = ""
 
+    raw_category: str | None = None
+
     @property
     def revision(self) -> str:
         fields = (self.category, self.title, self.road, self.suburb, self.council,
@@ -122,6 +124,7 @@ def parse_feed(feed: str, payload: dict) -> list[TrafficItem]:
         lon, lat = coordinates(coords)
         title = clean(p.get("displayName") or p.get("mainCategory") or p.get("headline"))
         category = clean(p.get("mainCategory") or feed).upper()
+        raw_category = clean(p.get("mainCategory"))
         def joined(values):
             return "; ".join(dict.fromkeys(text for value in values if (text := clean(value))))
         impacts = [period.get("roadextent") for period in periods]
@@ -141,7 +144,7 @@ def parse_feed(feed: str, payload: dict) -> list[TrafficItem]:
             for index, r in enumerate(roads)
             if index or r.get("crossStreet") or r.get("secondLocation"))
         items.append(TrafficItem(
-            item_id=f"{feed}:{feature['id']}", feed=feed, category=category, title=title,
+            item_id=f"{feed}:{feature['id']}", feed=feed, category=category, title=title, raw_category=raw_category,
             road=clean(road.get("mainStreet")), suburb=clean(road.get("suburb")),
             council=clean(p.get("OrgName")) if feed == "regional" else "",
             direction=joined(directions), impact=impact,

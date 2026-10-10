@@ -12,6 +12,7 @@ from ..web.routes import render
 from .feed import TYPES
 from .schedule import ClosurePeriod, window_state
 from ..presentation import freshness, traffic_feed_status
+from ..notice_selection import current_evidence
 import time
 
 router = APIRouter()
@@ -35,6 +36,7 @@ async def traffic_page(request: Request, page: int = Query(1, ge=1)):
         item["current_now"] = bool(item["active"] and not data.get("ended") and
                                     (data.get("start") is None or data["start"] <= time.time()) and
                                     (data.get("end") is None or data["end"] > time.time()))
+        item["notice"] = current_evidence("traffic", {"feed": item["feed"], "category": data.get("raw_category") if data.get("raw_category") is not None else item["category"]}, s, item["coverage"], item["current_now"] and item["missing_polls"] < 2)
         item["closure_state"] = (window_state(tuple(ClosurePeriod(**p) for p in data.get("periods", [])), time.time())[1]
                                  if item["current_now"] else "Notice is not currently active; closure status is unconfirmed")
     feeds = []
@@ -50,10 +52,8 @@ async def traffic_page(request: Request, page: int = Query(1, ge=1)):
 
 @router.get("/settings/traffic", response_class=HTMLResponse)
 async def traffic_settings_page(request: Request):
-    settings = request.app.state.db.all_settings()
-    return render(request, "settings_traffic.html", s=settings, councils=COUNCILS, types=TYPES,
-                  selected_councils=set(settings.get("traffic_councils", [])),
-                  selected_types=set(settings.get("traffic_types", [])))
+    from ..web.notice_routes import page
+    return page(request, "traffic")
 
 
 @router.post("/settings/traffic")

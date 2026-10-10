@@ -11,6 +11,7 @@ from ..web.routes import render
 from .councils import COUNCILS
 from .feed import LEVELS
 from ..presentation import freshness
+from ..notice_selection import current_evidence
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ async def rfs_page(request: Request, page: int = Query(1, ge=1)):
     return render(request, "rfs.html", s=s, councils=COUNCILS, levels=LEVELS,
                   selected_councils=set(s.get("rfs_councils", [])),
                   selected_levels=set(s.get("rfs_levels", [])),
-                  incidents=[dict(row) | {"data": json.loads(row["normalized_data"]), "coverage": decisions.get(row["incident_id"])} for row in rows],
+                  incidents=[dict(row) | {"data": json.loads(row["normalized_data"]), "coverage": decisions.get(row["incident_id"]), "notice": current_evidence("rfs", {"level": row["level"], "kind": row["kind"]}, s, decisions.get(row["incident_id"]), row["missing_polls"] < 2)} for row in rows],
                   pagination=pagination, last_success=last_success,
                   snapshot_freshness=freshness(last_success, s.get("rfs_poll_minutes", 10), s.get("rfs_enabled", False)),
                   rfs_status=poller.last_result, rfs_last_poll=poller.last_poll)
@@ -35,11 +36,8 @@ async def rfs_page(request: Request, page: int = Query(1, ge=1)):
 
 @router.get("/settings/rfs", response_class=HTMLResponse)
 async def rfs_settings_page(request: Request):
-    db = request.app.state.db
-    s = db.all_settings()
-    return render(request, "settings_rfs.html", s=s, councils=COUNCILS, levels=LEVELS,
-                  selected_councils=set(s.get("rfs_councils", [])),
-                  selected_levels=set(s.get("rfs_levels", [])))
+    from ..web.notice_routes import page
+    return page(request, "rfs")
 
 
 @router.post("/settings/rfs")
@@ -52,7 +50,8 @@ async def save_rfs_settings(request: Request,
     db = request.app.state.db
     db.set_setting("rfs_enabled", bool(rfs_enabled))
     db.set_setting("rfs_poll_minutes", max(5, int(rfs_poll_minutes)))
-    db.set_setting("rfs_levels", [x for x in LEVELS if x in rfs_levels])
+    if not db.get_setting("rfs_notice_selection", None) and (await request.form()).get("preserve_notice_selection") != "1":
+        db.set_setting("rfs_levels", [x for x in LEVELS if x in rfs_levels])
     request.app.state.rfs_poller.poke()
     db.add_event("INFO", "NSW RFS settings saved")
     return RedirectResponse("/settings/rfs", status_code=303)

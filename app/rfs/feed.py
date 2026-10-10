@@ -11,7 +11,7 @@ import httpx
 from ..config import BOM_USER_AGENT
 
 FEED_URL = "https://www.rfs.nsw.gov.au/feeds/majorIncidents.json"
-LEVELS = ("Emergency Warning", "Watch and Act", "Advice")
+LEVELS = ("Emergency Warning", "Watch and Act", "Advice", "Not Applicable", "Planned Burn")
 
 
 class RFSFeedError(RuntimeError):

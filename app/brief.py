@@ -100,6 +100,12 @@ def _location_names(value):
 
 def brief_bom_parts(alert, tz_name, action, budget):
     topic = re.sub(r"^Cancellation of\s+", "", alert.event, flags=re.I)
+    from .notice_selection import classify
+    classified = classify("bom", "type", topic)
+    if classified["id"] == "severe-thunderstorm-warning":
+        topic = ((classified["subtype"] + " ") if classified["subtype"] else "") + classified["label"]
+    if not topic:
+        topic = "Notice type not supplied"
     optional = []
     sections = []
     if alert.warning_sections:
@@ -116,6 +122,8 @@ def brief_bom_parts(alert, tz_name, action, budget):
     else:
         summary = compact_text(alert.warning_summary or alert.detail)
         locations = _location_names(alert.specific_locations or _area_string(alert.area_desc))
+        if classified["id"] == "severe-thunderstorm-warning" and classified["qualifier"]:
+            locations = unique(locations + _location_names(classified["qualifier"]))
         # Preserve additional provider location lists even when the primary list differs.
         for match in re.finditer(r"Locations which may be affected include (.+?)(?:\.|$)", summary, re.I):
             locations = unique(locations + _location_names(match[1]))

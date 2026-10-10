@@ -523,6 +523,13 @@ async def bom_page(request: Request, page: int = Query(1, ge=1)):
     decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, db.all_settings(), ("bom",)) if x["source"] == "bom"}
     for item in items:
         item["coverage"] = decisions.get(item["alert_id"])
+        from ..notice_selection import current_evidence
+        try:
+            expiry = datetime.datetime.fromisoformat(item.get("expires") or "")
+            active = not (expiry.tzinfo and expiry <= datetime.datetime.now(datetime.timezone.utc))
+        except ValueError:
+            active = True
+        item["notice"] = current_evidence("bom", {"type": item["event"]}, db.all_settings(), item["coverage"], active)
     return render(
         request, "bom.html", items=items, pagination=pagination,
         snapshot_freshness=freshness(snapshots.get("NSW", ""), db.get_setting("bom_poll_minutes", 5),
@@ -536,9 +543,8 @@ async def bom_page(request: Request, page: int = Query(1, ge=1)):
 
 @router.get("/settings/bom", response_class=HTMLResponse)
 async def bom_settings_page(request: Request):
-    legacy = await settings_page(request)
-    return render(request, "settings_bom.html", **{k: v for k, v in legacy.context.items()
-                                                   if k not in ("request", "max_bytes", "tz", "disp_label", "tx_label", "version")})
+    from .notice_routes import page
+    return page(request, "bom")
 
 
 @router.post("/settings/bom")
@@ -560,9 +566,9 @@ async def save_bom_settings(request: Request, poll_interval: int = Form(...),
     if all_warnings and warning_choices_submitted != "1":
         old = [e for e in db.get_setting("filter_include_exact", []) if e in _EVENT_GROUPS["Warning products"]]
         selected = old + [e for e in selected if e not in _EVENT_GROUPS["Warning products"]]
-    db.set_setting("filter_include_exact", list(dict.fromkeys(selected)))
-    db.set_setting("filter_include_suffix", ["Warning"] if all_warnings else [])
-    db.set_setting("filter_exclude_exact", [])
+    if not db.get_setting("bom_notice_selection", None) and (await request.form()).get("preserve_notice_selection") != "1":
+        db.set_setting("filter_include_exact", list(dict.fromkeys(selected)))
+        db.set_setting("filter_include_suffix", ["Warning"] if all_warnings else [])
     _poller(request).poke()
     db.add_event("INFO", "BOM settings saved")
     return RedirectResponse("/settings/bom", status_code=303)
@@ -666,9 +672,9 @@ async def save_settings(
                           if e in _EVENT_GROUPS["Warning products"]]
         selected = saved_warnings + [e for e in selected
                                      if e not in _EVENT_GROUPS["Warning products"]]
-    db.set_setting("filter_include_exact", list(dict.fromkeys(selected)))
-    db.set_setting("filter_include_suffix", ["Warning"] if all_warnings else [])
-    db.set_setting("filter_exclude_exact", [])
+    if not db.get_setting("bom_notice_selection", None) and (await request.form()).get("preserve_notice_selection") != "1":
+        db.set_setting("filter_include_exact", list(dict.fromkeys(selected)))
+        db.set_setting("filter_include_suffix", ["Warning"] if all_warnings else [])
 
     db.set_setting("meshcore_enabled", True)
     db.set_setting("meshcore_conn", (meshcore_conn or "serial").strip())

@@ -6,6 +6,8 @@ are fast local operations, so running them synchronously is fine.
 """
 from __future__ import annotations
 
+from .notice_selection import evaluate as notice_evaluate, values_for as notice_values
+
 from .transmission import TxResult, CONFIRMED, COMPLETED
 
 import json
@@ -790,6 +792,7 @@ class Database:
             return self._conn.execute("SELECT * FROM traffic_items WHERE item_id = ?", (item_id,)).fetchone()
 
     def traffic_save_item(self, item, council: str, active: bool, match=None) -> None:
+        selection = notice_evaluate("traffic", notice_values("traffic", item), self.all_settings()).metadata()
         with self._lock:
             self._conn.execute(
                 """INSERT INTO traffic_items
@@ -804,6 +807,7 @@ class Database:
                  council, item.revision, _now(), int(active)),
             )
             data = asdict(item)
+            data["notice_selection"] = selection
             if match is not None:
                 data.update(match_method=match.method, match_reason=match.reason)
             self._conn.execute("UPDATE traffic_items SET normalized_data=? WHERE item_id=?",
@@ -897,6 +901,7 @@ class Database:
             ).fetchone()
 
     def rfs_save_incident(self, incident, revision_hash: str) -> None:
+        selection = notice_evaluate("rfs", notice_values("rfs", incident), self.all_settings()).metadata()
         with self._lock:
             self._conn.execute(
                 """INSERT INTO rfs_incidents
@@ -914,7 +919,7 @@ class Database:
                  incident.source_url, revision_hash, _now()),
             )
             self._conn.execute("UPDATE rfs_incidents SET normalized_data=? WHERE incident_id=?",
-                               (json.dumps(asdict(incident)), incident.incident_id))
+                               (json.dumps(asdict(incident) | {"notice_selection": selection}), incident.incident_id))
             self._conn.commit()
 
     def rfs_mark_sent(self, incident_id: str, revision_hash: str) -> None:
@@ -936,7 +941,7 @@ class Database:
             "rfs", incident.incident_id, incident.name, incident.council,
             transmitted_text=text, detail=detail, transmit_status=status or None,
             disposition=disposition, revision_hash=incident.revision,
-            metadata={"level": incident.level, "status": incident.status,
+            metadata={"notice_selection": notice_evaluate("rfs", notice_values("rfs", incident), settings).metadata(), "level": incident.level, "status": incident.status,
                       "kind": incident.kind, "location": incident.location,
                       "size": incident.size, "agency": incident.agency,
                       "updated_raw": incident.updated, "published_raw": incident.published_raw,
