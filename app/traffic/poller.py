@@ -8,7 +8,7 @@ import time
 import logging
 from datetime import datetime, timezone
 
-from ..config import FINAL_VERIFICATION_MESSAGE, MAX_PAYLOAD_BYTES, VERIFICATION_INTERVAL_SECONDS, polling_seconds
+from ..config import FINAL_VERIFICATION_MESSAGE, MAX_PAYLOAD_BYTES, verification_interval_seconds, polling_seconds
 from ..brief import brief_parts, compact_time, unique, NoticeTooLong, transmission_label, transmission_topic, without_classification_prefix
 from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
 from ..rfs.councils import COUNCILS
@@ -369,13 +369,14 @@ class TrafficPoller:
                 self.db.add_error("traffic", "verification message exceeds MeshCore limit")
             return
         self._verification_budget_error = None
+        interval = verification_interval_seconds(self.db.get_setting("safety_warning_interval_minutes", 5))
         key = "verification_live_last_ts"
         saved = self.db.get_setting(key, {}) or {}
         channel = str(self.db.get_setting("meshcore_channel", 0))
         try:
             elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(saved.get(channel, ""))).total_seconds()
         except (ValueError, TypeError):
-            elapsed = VERIFICATION_INTERVAL_SECONDS
+            elapsed = interval
 
         def on_result(ok, error=""):
             if ok:
@@ -386,4 +387,4 @@ class TrafficPoller:
                 self.db.add_error("traffic", f"verification message failed: {error}")
 
         self.tx.enqueue_verification(FINAL_VERIFICATION_MESSAGE, on_result=on_result,
-                                     allow_new=elapsed >= VERIFICATION_INTERVAL_SECONDS)
+                                     allow_new=elapsed >= interval)

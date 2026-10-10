@@ -22,7 +22,7 @@ from .config import (
     MAX_PAYLOAD_BYTES,
     polling_seconds,
     POLL_HARD_TIMEOUT,
-    VERIFICATION_INTERVAL_SECONDS,
+    verification_interval_seconds,
 )
 from .dedupe import Decision, decide
 from .delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
@@ -477,14 +477,15 @@ class BomPoller:
                 self._db.add_event("WARN", detail)
             return
         self._verification_budget_error = None
+        interval = verification_interval_seconds(self._db.get_setting("safety_warning_interval_minutes", 5))
         key = "verification_dry_run_last_ts" if dry_run else "verification_live_last_ts"
         timestamps = self._db.get_setting(key, {}) or {}
         last = timestamps.get(str(channel), "")
         try:
             elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
         except (TypeError, ValueError):
-            elapsed = VERIFICATION_INTERVAL_SECONDS
-        due = elapsed >= VERIFICATION_INTERVAL_SECONDS
+            elapsed = interval
+        due = elapsed >= interval
         if dry_run:
             if due:
                 self._db.add_event("INFO", f"[DRY-RUN] would send: {FINAL_VERIFICATION_MESSAGE}")

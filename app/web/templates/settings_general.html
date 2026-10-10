@@ -11,6 +11,11 @@
     <label class="chk"><input type="checkbox" name="dry_run" value="1" {% if dry_run %}checked{% endif %}> Dry Run: preview messages without transmitting</label>
     <p class="hint">Dry Run applies to BOM and NSW RFS. Manual sends and tests can still transmit.</p>
   </div>
+  <div class="panel">
+    <label for="safety-warning-interval">Safety warning interval (minutes)</label>
+    <input id="safety-warning-interval" type="number" name="safety_warning_interval_minutes" min="1" max="1440" step="1" value="{{ safety_warning_interval_minutes }}" required aria-describedby="safety-warning-help">
+    <p id="safety-warning-help" class="hint">Minimum time between notice bot safety warnings on each channel. Applies to BOM, NSW RFS and Live Traffic NSW. Warnings follow notice transmissions; they are not sent during idle periods.</p>
+  </div>
   <button type="submit">Save general settings</button>
 </form>
 {% endblock %}

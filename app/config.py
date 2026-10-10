@@ -82,6 +82,7 @@ BOM_USER_AGENT = (
 )
 
 DEFAULT_SETTINGS: dict = {
+    "safety_warning_interval_minutes": 5,
     "maintenance_enabled": True,
     "maintenance_history_days": 90,
     "maintenance_log_days": 90,
@@ -151,6 +152,13 @@ FINAL_VERIFICATION_MESSAGE = (
 )
 
 VERIFICATION_INTERVAL_SECONDS = 300
+
+
+def verification_interval_seconds(minutes) -> int:
+    """Use a safe default for missing or malformed persisted settings."""
+    if isinstance(minutes, int) and not isinstance(minutes, bool) and 1 <= minutes <= 1440:
+        return minutes * 60
+    return VERIFICATION_INTERVAL_SECONDS
 
 BURST_GAP_SECONDS = 30
 MULTIPART_GAP_SECONDS = 3

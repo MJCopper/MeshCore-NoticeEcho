@@ -457,17 +457,21 @@ async def general_settings_page(request: Request):
     db = _db(request)
     tz = db.get_setting("display_timezone", "Australia/Sydney")
     return render(request, "settings_general.html", timezones=_TIMEZONES,
-                  tz_current=tz, dry_run=bool(db.get_setting("dry_run", True)))
+                  tz_current=tz, dry_run=bool(db.get_setting("dry_run", True)),
+                  safety_warning_interval_minutes=db.get_setting("safety_warning_interval_minutes", 5))
 
 
 @router.post("/settings/general")
 async def save_general_settings(request: Request,
                                 display_timezone: str = Form("Australia/Sydney"),
-                                dry_run: str = Form("")):
+                                dry_run: str = Form(""),
+                                safety_warning_interval_minutes: int | None = Form(None, ge=1, le=1440)):
     db = _db(request)
     allowed = {value for value, _ in _TIMEZONES}
     db.set_setting("display_timezone", display_timezone if display_timezone in allowed else "Australia/Sydney")
     db.set_setting("dry_run", bool(dry_run))
+    if safety_warning_interval_minutes is not None:
+        db.set_setting("safety_warning_interval_minutes", safety_warning_interval_minutes)
     db.add_event("INFO", "general settings saved")
     return RedirectResponse("/settings/general", status_code=303)
 
