@@ -207,6 +207,22 @@ class Database:
         self._init_schema()
         self.fresh_install = not bool(self._conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone())
         self._seed_settings()
+        self._migrate_notice_groups()
+
+    def _migrate_notice_groups(self):
+        from .notice_selection import grouped_policy, validate
+        with self._lock:
+            with self._conn:
+                for service in ("bom", "rfs", "traffic"):
+                    key = service + "_notice_selection"
+                    row = self._conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+                    old = json.loads(row["value"]) if row else None
+                    if not old or old.get("schema_version") == 2:
+                        continue
+                    new = grouped_policy(service, old)
+                    validate(service, new)
+                    self._conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (key + "_before_groups", json.dumps(old)))
+                    self._conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(new), key))
 
     def _init_schema(self) -> None:
         with self._lock:

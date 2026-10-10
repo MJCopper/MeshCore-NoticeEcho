@@ -326,7 +326,7 @@ def test_bom_service_page_replaces_legacy_warning_controls_with_family_selection
     })
     before=db.all_settings()
     body = client.get("/settings/bom").text
-    assert 'name="type_mode"' in body
+    assert 'name="type_warnings_mode"' in body
     assert 'value="marine-wind-warning" checked' in body
     assert 'value="flood-watch" checked' in body
     assert 'Existing rules are active' in body

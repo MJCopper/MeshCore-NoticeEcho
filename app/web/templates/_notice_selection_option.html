@@ -1,0 +1,5 @@
+{% set obs = observations[dim][entry.id] %}
+<div class="notice-option"><label class="chk"><input type="checkbox" name="{{ input_name }}" value="{{ entry.id }}" {% if entry.id in selected_ids %}checked{% endif %}{% if disabled %} disabled{% endif %}> {{ entry.label }}</label>
+<p class="hint">{{ obs.current }} current · {{ obs.observed }} observed distinct notices{% if not obs.observed %} · Catalogue only{% endif %}. {{ entry.description }}</p>
+{% if entry.aliases %}<p class="hint">Reviewed variants: {{ entry.aliases|join(" · ") }}</p>{% endif %}
+{% if obs.examples %}<details><summary>Provider labels and variants</summary>{{ obs.examples|join(' · ') }}</details>{% endif %}</div>
