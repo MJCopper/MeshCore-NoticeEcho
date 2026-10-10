@@ -193,6 +193,9 @@
     .rec-area{color:#5c6678;font-size:12.5px;overflow-wrap:anywhere;}
 
     /* settings checkbox groups */
+    .notice-dimension.is-all fieldset{background:var(--inset);}
+    .notice-dimension.is-all .chk{opacity:.5;cursor:not-allowed;}
+    .notice-all-note[hidden]{display:none;}
     .checkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:7px 16px;
       border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:#fff;}
     .checkgrid.scroll{max-height:300px;overflow:auto;}

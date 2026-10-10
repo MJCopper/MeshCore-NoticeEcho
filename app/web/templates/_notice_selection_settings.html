@@ -11,11 +11,12 @@
 {% else %}<input type="hidden" name="catalogue" value="{{ 'active' if active_policy else 'latest' }}">{% endif %}
 <label>Find classifications <input type="search" id="classification-search" placeholder="Type a name or provider variant"></label>
 {% for dim, entries in policy.catalogue.dimensions.items() %}
-<section><h4>{{ {'type':'Notice type','level':'Alert level','kind':'Incident type','category':'Category'}[dim] }}</h4>
-<label><select name="{{ dim }}_mode"><option value="all" {% if policy.dimensions[dim].mode == 'all' %}selected{% endif %}>All (including future, unrecognized and not supplied)</option><option value="selected" {% if policy.dimensions[dim].mode == 'selected' %}selected{% endif %}>Selected classifications only</option></select></label>
+<section class="notice-dimension{% if policy.dimensions[dim].mode == 'all' %} is-all{% endif %}" data-dimension="{{ dim }}"><h4>{{ {'type':'Notice type','level':'Alert level','kind':'Incident type','category':'Category'}[dim] }}</h4>
+<label><select name="{{ dim }}_mode" class="notice-mode" aria-describedby="{{ dim }}-all-note"><option value="all" {% if policy.dimensions[dim].mode == 'all' %}selected{% endif %}>All (including future, unrecognized and not supplied)</option><option value="selected" {% if policy.dimensions[dim].mode == 'selected' %}selected{% endif %}>Selected classifications only</option></select></label>
+<p class="hint notice-all-note" id="{{ dim }}-all-note" {% if policy.dimensions[dim].mode != 'all' %}hidden{% endif %}>All classifications are included. Individual choices apply only in Selected mode.</p>
 {% for group, grouped in entries|groupby('family') %}<fieldset><legend>{{ group }}</legend>
 {% for entry in grouped %}{% set obs = observations[dim][entry.id] %}
-<div class="notice-option"><label class="chk"><input type="checkbox" name="{{ dim }}_selected" value="{{ entry.id }}" {% if entry.id in policy.dimensions[dim].selected %}checked{% endif %}> {{ entry.label }}</label>
+<div class="notice-option"><label class="chk"><input type="checkbox" name="{{ dim }}_selected" value="{{ entry.id }}" {% if entry.id in policy.dimensions[dim].selected %}checked{% endif %}{% if policy.dimensions[dim].mode == 'all' %} disabled{% endif %}> {{ entry.label }}</label>
 <p class="hint">{{ obs.current }} current · {{ obs.observed }} observed distinct notices{% if not obs.observed %} · Catalogue only{% endif %}. {{ entry.description }}</p>
 {% if entry.aliases %}<p class="hint">Reviewed variants: {{ entry.aliases|join(" · ") }}</p>{% endif %}
 {% if obs.examples %}<details><summary>Provider labels and variants</summary>{{ obs.examples|join(' · ') }}</details>{% endif %}</div>
@@ -25,5 +26,44 @@
 {% if preview %}<h3>Preview of saved current notices</h3><p>{{ comparisons|length }} notices evaluated. Geography is unchanged. A selection match does not imply a new transmission: completed deliveries remain deduplicated.</p>
 <table><thead><tr><th>Notice</th><th>Before → proposed eligibility</th><th>Classification and other reasons</th></tr></thead><tbody>
 {% for item in comparisons %}<tr><td>{{ item.title }}{% if item.changed %}<br><b>Changed</b>{% endif %}</td><td>{{ 'Eligible' if item.old_ok else 'Excluded' }} → {{ 'Eligible' if item.new_ok else 'Excluded' }}</td><td>{{ item.after.reason }}{% for blocker in item.blockers %}<br>{{ blocker }}{% endfor %}{% if item.closure %}<br>Previously transmitted closure bypasses classification selection{% endif %}{% for dim, classified in item.after.dimensions.items() %}<br>{{ dim }}: {{ item.before.dimensions[dim].label }} → {{ classified.label }} · raw: {{ classified.raw or 'Not supplied' }}{% if classified.qualifier %} · qualifier: {{ classified.qualifier }}{% endif %}{% if classified.subtype %} · {{ classified.subtype }}{% endif %}{% endfor %}</td></tr>{% endfor %}</tbody></table>{% endif %}
-<script>document.getElementById('classification-search').addEventListener('input', function () {const query=this.value.toLowerCase();document.querySelectorAll('.notice-option').forEach(function(option){option.hidden=!option.textContent.toLowerCase().includes(query);});});</script>
+<script>
+(function () {
+  const panel = document.getElementById('notice-selection');
+  const dimensions = panel.querySelectorAll('.notice-dimension');
+  dimensions.forEach(function (dimension) {
+    const mode = dimension.querySelector('.notice-mode');
+    function update() {
+      const all = mode.value === 'all';
+      dimension.classList.toggle('is-all', all);
+      dimension.querySelector('.notice-all-note').hidden = !all;
+      dimension.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+        box.disabled = all;
+      });
+    }
+    mode.addEventListener('change', update);
+    update();
+  });
+  panel.querySelector('form').addEventListener('submit', function () {
+    const form = this;
+    form.querySelectorAll('[data-selection-mirror]').forEach(function (input) { input.remove(); });
+    function hidden(name, value) {
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = name; input.value = value;
+      input.dataset.selectionMirror = '1'; form.appendChild(input);
+    }
+    dimensions.forEach(function (dimension) {
+      hidden(dimension.dataset.dimension + '_choices_submitted', '1');
+      dimension.querySelectorAll('input[type="checkbox"]').forEach(function (box) {
+        if (box.disabled && box.checked) hidden(box.name, box.value);
+      });
+    });
+  });
+  document.getElementById('classification-search').addEventListener('input', function () {
+    const query = this.value.toLowerCase();
+    panel.querySelectorAll('.notice-option').forEach(function (option) {
+      option.hidden = !option.textContent.toLowerCase().includes(query);
+    });
+  });
+})();
+</script>
 </div>

@@ -69,8 +69,13 @@ async def save_notices(request: Request, service: str):
         if form.get("action") not in ("preview", "save"):
             raise ValueError("Choose preview or save")
         for dim in policy["dimensions"]:
-            policy["dimensions"][dim] = {"mode": str(form.get(dim + "_mode", "selected")),
-                                        "selected": list(form.getlist(dim + "_selected"))}
+            mode = str(form.get(dim + "_mode", "selected"))
+            selected = list(form.getlist(dim + "_selected"))
+            # Disabled browser inputs are omitted. Keep stored choices without JS;
+            # the widget submits checked mirrors and an explicit empty marker.
+            if mode == "all" and not selected and form.get(dim + "_choices_submitted") != "1":
+                selected = policy["dimensions"][dim]["selected"]
+            policy["dimensions"][dim] = {"mode": mode, "selected": selected}
         validate(service, policy)
     except (ValueError, TypeError, KeyError) as exc:
         response = page(request, service, error=str(exc))

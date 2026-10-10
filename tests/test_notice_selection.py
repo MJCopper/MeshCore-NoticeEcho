@@ -392,3 +392,37 @@ def test_unified_layout_redirects_and_hides_migration_after_application(environm
     assert 'Save selection' in body
     assert 'Unrecognized' in body and 'Not supplied' in body
     assert not app.state.tx.sent
+
+
+@pytest.mark.parametrize("source",["bom","rfs","traffic"])
+def test_all_mode_disables_only_its_choices_and_preserves_them_without_javascript(environment,source):
+    from html.parser import HTMLParser
+    app=environment;app.include_router(router);db=app.state.db
+    p=proposal(source,db.all_settings());dim=next(iter(p['dimensions']))
+    selected=[p['catalogue']['dimensions'][dim][0]['id']]
+    p['dimensions'][dim]={'mode':'all','selected':selected}
+    db.set_setting(source+'_notice_selection',p)
+    form={'action':'preview','catalogue':'active'}
+    for name,choice in p['dimensions'].items():form[name+'_mode']=choice['mode']
+    response=TestClient(app).post('/settings/notices/'+source,data=form)
+    assert response.status_code==200
+    class Inputs(HTMLParser):
+        def __init__(self):super().__init__();self.inputs=[]
+        def handle_starttag(self,tag,attrs):
+            if tag in ('input','select'):self.inputs.append(dict(attrs))
+    parser=Inputs();parser.feed(response.text)
+    boxes=[x for x in parser.inputs if x.get('name')==dim+'_selected']
+    assert boxes and all('disabled' in x for x in boxes)
+    assert any(x.get('value')==selected[0] and 'checked' in x for x in boxes)
+    assert all('disabled' not in x for x in parser.inputs if x.get('name')==dim+'_mode')
+    assert 'Individual choices apply only in Selected mode' in response.text
+    form['action']='save'
+    TestClient(app).post('/settings/notices/'+source,data=form,follow_redirects=False)
+    assert db.get_setting(source+'_notice_selection')['dimensions'][dim]['selected']==selected
+    form[dim+'_mode']='selected';form[dim+'_selected']=selected
+    TestClient(app).post('/settings/notices/'+source,data=form,follow_redirects=False)
+    assert db.get_setting(source+'_notice_selection')['dimensions'][dim]['selected']==selected
+    # Explicit empty widget submission retains an intentional uncheck.
+    form[dim+'_mode']='all';form.pop(dim+'_selected');form[dim+'_choices_submitted']='1'
+    TestClient(app).post('/settings/notices/'+source,data=form,follow_redirects=False)
+    assert db.get_setting(source+'_notice_selection')['dimensions'][dim]['selected']==[]
