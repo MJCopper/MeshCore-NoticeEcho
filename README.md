@@ -60,10 +60,10 @@ docker compose up -d --build
 Settings and history persist in `data/wx-echo.db`. Keep the `data/` directory when moving or reinstalling. To back up the Docker database:
 
 ```bash
-docker compose stop
-cp data/wx-echo.db data/wx-echo.db.backup
-docker compose start
+docker compose exec -T wx-echo python -m app.maintenance backup --database /data/wx-echo.db
 ```
+
+Daily maintenance and verified backups are configurable on Troubleshoot. See [database maintenance](docs/database-maintenance.md) for retention, restore and offline compaction.
 
 For native Linux, rerun the installer to update. Its database is in the installation's `data/` directory; the active path is shown on Troubleshoot.
 

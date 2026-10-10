@@ -4,6 +4,11 @@ from __future__ import annotations
 import json
 
 from .transmission import COMPLETED
+from .brief import NoticeTooLong
+
+
+class RecoveryBlocked(NoticeTooLong):
+    """Keep partial delivery evidence when its recorded parts cannot fit."""
 
 from .config import BURST_GAP_SECONDS, MULTIPART_GAP_SECONDS, QUEUE_MAX
 
@@ -59,3 +64,28 @@ def permanently_unsendable(row, revision: str, text: str) -> bool:
     """Legacy oversized failures are eligible for streaming retry."""
     # Previously oversized notices can now stream; do not strand old failed rows.
     return False
+
+
+def recovery_parts(row, revision, budget, *, force=False):
+    """Pin an in-progress revision's recorded wording across formatter upgrades.
+
+    An explicit resend starts fresh, except deferred work that has not been admitted.
+    Oversized legacy failures can still use the current formatter if no part completed.
+    """
+    if row is None or row["revision_hash"] != revision or row["transmit_status"] not in ("failed", "interrupted", "deferred"):
+        return None
+    if force and row["transmit_status"] != "deferred":
+        return None
+    text = row["transmitted_text"] or ""
+    if not text:
+        return None
+    parts = text.split(" || ")
+    if all(part and len(part.encode("utf-8")) <= budget for part in parts):
+        return parts
+    try:
+        outcomes = json.loads(row["delivery_parts"] or "[]")
+    except (KeyError, IndexError, TypeError, ValueError):
+        outcomes = []
+    if any(outcome.get("status") in COMPLETED for outcome in outcomes):
+        raise RecoveryBlocked("Formatting blocked: recorded partial notice exceeds current byte budget; original wording must be retained")
+    return None

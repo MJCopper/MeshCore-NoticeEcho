@@ -82,6 +82,13 @@ BOM_USER_AGENT = (
 )
 
 DEFAULT_SETTINGS: dict = {
+    "maintenance_enabled": True,
+    "maintenance_history_days": 90,
+    "maintenance_log_days": 90,
+    "maintenance_event_days": 30,
+    "maintenance_error_days": 30,
+    "maintenance_stale_days": 30,
+    "maintenance_backup_keep": 7,
     "geographic_policy": None,
     "bom_notice_selection": None,
     "rfs_notice_selection": None,

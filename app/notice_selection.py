@@ -78,6 +78,8 @@ def grouped_policy(service, policy):
 def adopt_catalogue(service, policy):
     old = grouped_policy(service, policy)
     result = {"schema_version": 2, "catalogue": catalogue(service), "dimensions": {}}
+    if service == "traffic" and "traffic_feed_mode" in old:
+        result["traffic_feed_mode"] = old["traffic_feed_mode"]
     for dim, definitions in result["catalogue"]["groups"].items():
         result["dimensions"][dim] = {"special": old["dimensions"][dim]["special"][:], "groups": {}}
         for group in definitions:
@@ -168,6 +170,8 @@ def validate(service, policy):
     if not isinstance(policy, dict) or not isinstance(policy.get("catalogue"), dict):
         raise ValueError("Invalid notice selection policy")
     snap = policy["catalogue"]
+    if "traffic_feed_mode" in policy and (service != "traffic" or policy["traffic_feed_mode"] != "categories"):
+        raise ValueError("Invalid traffic feed policy")
     if set(snap.get("dimensions", {})) != set(LABELS[service]) or set(policy.get("dimensions", {})) != set(LABELS[service]):
         raise ValueError("Invalid selection dimensions")
     for dim, selection in policy["dimensions"].items():
@@ -237,7 +241,7 @@ def evaluate(service, values, settings):
         feeds = settings.get("traffic_types", [])
         if values.get("feed") not in ("incident", "roadwork", "fire", "flood", "regional"):
             reasons.insert(0, "invalid provider feed")
-        elif values.get("feed") not in feeds or ("ROADWORK" in str(values.get("category", "")).upper() and "roadwork" not in feeds):
+        elif not (policy and policy.get("traffic_feed_mode") == "categories") and (values.get("feed") not in feeds or ("ROADWORK" in str(values.get("category", "")).upper() and "roadwork" not in feeds)):
             reasons.insert(0, "hazard type")
     return Selection(not reasons, "; ".join(reasons) or "Selected notice classifications", classified, snap, "catalogue" if policy else "legacy", policy.get("schema_version", 1) if policy else 1)
 

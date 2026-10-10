@@ -62,3 +62,6 @@ Automated tests simulate SDK responses and exercise the SDK packet parser; they 
 ### Companion clock verification on a physical device
 
 Compare `clock` with server time, introduce an offset with `time <epoch>`, and verify `clock sync` reads back the correction. Repeat with automatic synchronization enabled, then reboot and reconnect the companion through USB/TCP. Confirm a periodic correction and check that a multipart notice completes while a clock operation is due. Test failure recovery and verify diagnostics do not claim success without readback or cause duplicate notice transmissions. Automatic synchronization requires a correct server clock; daylight saving is a display concern. Physical-device validation is separate from automated protocol/scheduler tests.
+
+
+Database maintenance controls show retention, protected history, storage, last/next scheduled run, verified backup paths and integrity checks. Scheduled cleanup is independent of service polling. See [database maintenance](database-maintenance.md).

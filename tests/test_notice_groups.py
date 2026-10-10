@@ -261,3 +261,25 @@ def test_invalid_group_submission_keeps_saved_policy(environment,change):
     response=TestClient(app).post('/settings/notices/traffic',data=f)
     assert response.status_code==422
     assert db.get_setting('traffic_notice_selection')==p and not app.state.tx.sent
+
+
+def test_traffic_feed_policy_preview_and_explicit_adoption(environment):
+    from app.traffic.web import router as traffic_router
+    app=environment;app.include_router(router);app.include_router(traffic_router);db=app.state.db;seed(app,'traffic')
+    p=grouped('traffic','all');db.set_setting('traffic_notice_selection',p)
+    db.set_setting('traffic_types',[])
+    client=TestClient(app);before=db.all_settings()
+    f=form_for(p);f['traffic_feed_mode']='categories'
+    response=client.post('/settings/notices/traffic',data=f)
+    assert response.status_code==200
+    assert 'Excluded → Eligible' in response.text
+    assert db.all_settings()==before and not app.state.tx.sent
+    f['action']='save'
+    assert client.post('/settings/notices/traffic',data=f,follow_redirects=False).status_code==303
+    assert db.get_setting('traffic_notice_selection')['traffic_feed_mode']=='categories'
+    assert db.get_setting('traffic_types')==[] and not app.state.tx.sent
+    assert client.post('/settings/traffic',data={'preserve_notice_selection':'1','traffic_enabled':'1','traffic_poll_minutes':'10'},follow_redirects=False).status_code==303
+    assert db.get_setting('traffic_types')==[]
+    page=client.get('/settings/traffic').text
+    assert 'name="traffic_types"' not in page
+    assert 'Categories control transmission across all feeds' in page

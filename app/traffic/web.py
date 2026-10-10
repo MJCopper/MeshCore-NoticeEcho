@@ -66,7 +66,10 @@ async def save_traffic_settings(request: Request,
     db = request.app.state.db
     db.set_setting("traffic_enabled", bool(traffic_enabled))
     db.set_setting("traffic_poll_minutes", max(5, int(traffic_poll_minutes)))
-    db.set_setting("traffic_types", [x for x in TYPES if x in traffic_types])
+    # Old feed restrictions are retained until explicit category-only adoption.
+    form = await request.form()
+    if form.get("preserve_notice_selection") != "1":
+        db.set_setting("traffic_types", [x for x in TYPES if x in traffic_types])
     request.app.state.traffic_poller.poke()
     db.add_event("INFO", "Live Traffic NSW settings saved")
     return RedirectResponse("/settings/traffic", status_code=303)

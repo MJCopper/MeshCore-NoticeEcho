@@ -480,10 +480,11 @@ async def test_selected_fire_feed_is_requested_on_both_pages_with_rfs_enabled(en
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
         page=await client.get('/traffic')
         assert page.status_code==200
-        assert 'Selected; awaiting first poll' in page.text
+        assert 'Awaiting first poll' in page.text
         status=(await client.get('/troubleshoot/status')).json()
         fire=next(f for f in status['traffic_feeds'] if f['feed']=='fire')
         assert fire['requested'] is True
-        assert fire['freshness']=='Selected; awaiting first poll'
+        assert fire['freshness']=='Awaiting first poll'
         incident=next(f for f in status['traffic_feeds'] if f['feed']=='incident')
-        assert incident['freshness']=='Feed not selected'
+        assert incident['requested'] is True
+        assert incident['freshness']=='Awaiting first poll'

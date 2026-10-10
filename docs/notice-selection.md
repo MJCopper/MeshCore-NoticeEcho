@@ -53,3 +53,15 @@ See [the snapshot audit](notice-selection-audit.md) for reviewed collected data 
 Existing saved dimension-wide policies migrate transactionally at application startup to selection schema 2. The saved recognition catalogue is retained; this migration does not adopt new product classifications. All becomes All in every ordinary group with Unrecognized and Not supplied checked. Selected distributes checked IDs into their groups and retains its Special choices. Preserved inactive checkbox choices also carry across.
 
 The original configuration is backed up under `<service>_notice_selection_before_groups`; migration is idempotent and rolls back on failure. It does not fetch data, create transmission records, rewrite recorded decisions or resend completed notices. Installations still using legacy provider rules keep those rules until explicitly applying the proposed new selection. Older open forms remain accepted and are converted to the grouped schema when saved.
+
+
+## Traffic feed collection and transmission
+
+When monitoring is enabled, all five Traffic feeds are collected: incident, roadwork, fire, flood and regional. Feed health remains on the current Traffic page, and partial feed failures remain isolated. Collection runs even before geographic coverage is configured; transmission still requires coverage.
+
+Existing transmission feed restrictions stay active until you select **Apply category-only transmission filtering across all feeds**, preview current saved notices, and save on Traffic settings. This removes both the feed restriction and the Roadwork gate for regional roadworks. Categories, Special choices, geography, active dates and delivery checks still apply. Catalogue updates preserve this choice. Monitoring saves preserve old restrictions until adoption, without displaying feed checkboxes.
+
+Preview uses saved data; new feeds appear after a successful poll. Applying settings does not resend completed notices. First live polls retain baseline suppression. Use troubleshooting resend to explicitly transmit eligible current notices. Identical provider revisions queued or delivered through another feed are suppressed if feed preference changes; explicit resend can resend completed notices but cannot duplicate queued notices.
+
+
+Radio messages omit administrative classification placeholders while keeping useful provider labels. This does not change filtering or what the web interface displays. See [transmitted classification wording](transmission-wording.md).

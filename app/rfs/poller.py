@@ -9,9 +9,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from ..config import FINAL_VERIFICATION_MESSAGE, MAX_PAYLOAD_BYTES, VERIFICATION_INTERVAL_SECONDS, polling_seconds
-from ..brief import brief_parts, NoticeTooLong
-from ..formatter import compact_topic
-from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice
+from ..brief import brief_parts, NoticeTooLong, transmission_label, transmission_topic, same_classification, without_classification_prefix
+from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
 from .feed import RFSClient, RFSFeedError, council_key
 from .councils import COUNCILS
 from ..geography import incident_delivery_coverage, saved_evidence, active as geographic_active
@@ -21,8 +20,7 @@ logger = logging.getLogger("wx_echo.rfs")
 
 def format_incident(incident, budget: int, action: str = "NEW") -> list[str]:
     # Preserve the warning level, cause, status and fullest location once.
-    topic, _ = compact_topic(incident.level or "Incident", "NSW RFS", action,
-                             budget, "check rfs.nsw.gov.au")
+    topic = transmission_topic([incident.level, incident.kind], "Incident")
     name, location = incident.name.strip(), incident.location.strip()
     name_key, location_key = council_key(name), council_key(location)
     if name_key and name_key in location_key:
@@ -31,7 +29,9 @@ def format_incident(incident, budget: int, action: str = "NEW") -> list[str]:
         details = [name]
     else:
         details = [value for value in (name, location) if value]
-    kind = incident.kind if incident.kind.casefold() not in incident.name.casefold() else ""
+    kind = transmission_label(incident.kind)
+    if same_classification(kind, topic) or (kind and without_classification_prefix(name, kind) != name):
+        kind = ""
     core = "; ".join(value for value in (kind, incident.status) if value)
     optional = [f"{incident.council} council" if incident.council else "",
                 "Reported size: " + incident.size if incident.size else "",
@@ -159,7 +159,14 @@ class RFSPoller:
                 continue
             action = "CLOSED" if closing else "UPDATE" if previous and previous["last_sent_hash"] else "NEW"
             try:
-                parts = format_incident(incident, budget, action=action)
+                parts = (recovery_parts(latest, incident.revision, budget, force=force) if not dry_run else None)
+                if parts is None:
+                    parts = format_incident(incident, budget, action=action)
+            except RecoveryBlocked as exc:
+                if latest["detail"] != str(exc):
+                    self.db.rfs_update_history(latest["id"], "failed", str(exc))
+                    self.db.add_error("rfs", str(exc))
+                continue
             except NoticeTooLong as exc:
                 if not latest or latest["revision_hash"] != incident.revision or latest["disposition"] != "formatting-blocked":
                     self.db.rfs_add_history(incident, "", "blocked", str(exc), "formatting-blocked")

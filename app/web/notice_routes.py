@@ -80,9 +80,13 @@ async def save_notices(request: Request, service: str):
     settings = db.all_settings()
     policy = grouped_policy(service, settings.get(service + "_notice_selection") or proposal(service, settings))
     previous_groups = {dim: set(choice["groups"]) for dim, choice in policy["dimensions"].items()}
+    if service == "traffic" and form.get("traffic_feed_mode") == "categories":
+        policy["traffic_feed_mode"] = "categories"
     if form.get("catalogue") == "latest":
         policy = adopt_catalogue(service, policy)
     try:
+        if "traffic_feed_mode" in form and (service != "traffic" or form.get("traffic_feed_mode") != "categories"):
+            raise ValueError("Invalid traffic feed policy")
         if form.get("catalogue", "active") not in ("active", "latest"):
             raise ValueError("Choose active or latest catalogue")
         if form.get("action") not in ("preview", "save"):
@@ -90,10 +94,12 @@ async def save_notices(request: Request, service: str):
         legacy_form = any(dim + suffix in form for dim in policy["dimensions"] for suffix in ("_mode", "_selected"))
         if legacy_form:
             # Compatibility for previously bookmarked/open dimension-wide forms.
-            allowed = {"action", "catalogue"} | {dim + suffix for dim in policy["dimensions"] for suffix in ("_mode", "_selected", "_choices_submitted")}
+            allowed = {"action", "catalogue", "traffic_feed_mode"} | {dim + suffix for dim in policy["dimensions"] for suffix in ("_mode", "_selected", "_choices_submitted")}
             if set(form.keys()) - allowed:
                 raise ValueError("Do not mix group and dimension-wide controls")
             old = {"catalogue": policy["catalogue"], "dimensions": {}}
+            if service == "traffic" and policy.get("traffic_feed_mode") == "categories":
+                old["traffic_feed_mode"] = "categories"
             for dim, choice in policy["dimensions"].items():
                 mode = str(form.get(dim + "_mode", "selected"))
                 selected = list(form.getlist(dim + "_selected"))
@@ -103,7 +109,7 @@ async def save_notices(request: Request, service: str):
             validate(service, old)
             policy = grouped_policy(service, old)
         else:
-            allowed = {"action", "catalogue"}
+            allowed = {"action", "catalogue", "traffic_feed_mode"}
             for dim, choice in policy["dimensions"].items():
                 allowed.update({dim + "_special", dim + "_special_submitted"})
                 if form.get(dim + "_special_submitted") != "1":

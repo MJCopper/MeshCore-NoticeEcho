@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from .config import load_bootstrap
 from .db import Database
+from .maintenance import Maintenance
 from .logging_setup import setup_logging
 from .diagnostic_logs import ProcessLogs
 from .troubleshooting import Troubleshooting, utc
@@ -70,6 +71,8 @@ async def lifespan(app: FastAPI):
     app.state.traffic_poller = traffic_poller
 
     app.state.troubleshooting = Troubleshooting(app)
+    app.state.maintenance = Maintenance(db)
+    app.state.maintenance.start()
 
     # Liveness watchdog: force a restart if the event loop ever wedges.
     liveness = Liveness(stall_seconds=90.0)
@@ -92,6 +95,7 @@ async def lifespan(app: FastAPI):
         beat_task.cancel()
         if not startup_task.done():
             startup_task.cancel()
+        await app.state.maintenance.close()
         await app.state.troubleshooting.close()
         await traffic_poller.stop()
         await rfs_poller.stop()

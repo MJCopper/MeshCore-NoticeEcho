@@ -25,7 +25,7 @@ from .config import (
     VERIFICATION_INTERVAL_SECONDS,
 )
 from .dedupe import Decision, decide
-from .delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice
+from .delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
 from .filters import FilterRules, should_include
 from .brief import brief_bom_parts, NoticeTooLong
 from .models import Alert
@@ -164,8 +164,6 @@ class BomPoller:
         items = [item for item in items if item.get("region", "NSW") == "NSW"]
         for item in items:
             item.setdefault("region", "NSW")
-        self._db.purge_expired_state()
-        self._db.prune_history()
 
         rules = FilterRules.from_settings(settings)
         tz_name = settings.get("display_timezone", "Australia/Sydney")
@@ -307,8 +305,22 @@ class BomPoller:
             "UPDATE" if decision.disposition == "update" or (latest is not None and (
                 latest["revision_hash"].partition(":")[0] != alert.revision_hash()
                 or latest["disposition"] == "update")) else "NEW")
+        coverage = json.dumps(["geography-or-v1", all_councils, sorted(selected), include_unknown,
+                               sorted(districts), settings.get(GEOGRAPHIC_KEY), rules.include_exact,
+                               rules.include_suffix, rules.exclude_exact],
+                              separators=(",", ":"))
+        coverage_hash = hashlib.sha256(coverage.encode()).hexdigest()[:8]
+        revision_hash = f"{alert.revision_hash()}:{coverage_hash}"
         try:
-            parts = brief_bom_parts(render_alert, tz_name, action, budget)
+            parts = (recovery_parts(latest, revision_hash, budget, force=force) if not dry_run and decision.transmit else None)
+            if parts is None:
+                parts = brief_bom_parts(render_alert, tz_name, action, budget)
+        except RecoveryBlocked as exc:
+            item["selection_reason"] = str(exc)
+            if latest["detail"] != str(exc):
+                self._db.update_history_transmit_status(latest["id"], "failed", str(exc))
+                self._db.add_error("bom", str(exc))
+            return False
         except NoticeTooLong as exc:
             parts = []
             if decision.transmit:
@@ -321,12 +333,6 @@ class BomPoller:
                 return False
         logged_text = " || ".join(parts)
 
-        coverage = json.dumps(["geography-or-v1", all_councils, sorted(selected), include_unknown,
-                               sorted(districts), settings.get(GEOGRAPHIC_KEY), rules.include_exact,
-                               rules.include_suffix, rules.exclude_exact],
-                              separators=(",", ":"))
-        coverage_hash = hashlib.sha256(coverage.encode()).hexdigest()[:8]
-        revision_hash = f"{alert.revision_hash()}:{coverage_hash}"
         if permanently_unsendable(latest, revision_hash, logged_text):
             return False
         if (decision.transmit and latest is not None

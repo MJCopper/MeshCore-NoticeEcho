@@ -34,6 +34,24 @@
   <div id="application-diagnostics"></div>
   <a href="/troubleshoot/bundle" class="button">Download redacted diagnostic bundle</a>
 </div>
+<div class="panel" id="database-maintenance">
+  <h3>Database maintenance</h3>
+  <p class="hint">Daily cleanup runs independently of service polling. Pending deliveries, identity anchors and linked transmission attempts are protected, so some records remain beyond retention. A verified backup is created before cleanup. Legacy migration backup tables are retained.</p>
+  <div id="database-status" style="white-space:pre-wrap" aria-live="polite">Loading database status…</div>
+  <form id="database-settings" onsubmit="saveDatabaseSettings(event)">
+    <label class="chk"><input type="checkbox" name="maintenance_enabled" {% if s.get('maintenance_enabled', True) %}checked{% endif %}> Enable daily maintenance and backups</label>
+    {% for key,label,default in [('maintenance_history_days','History retention (days)',90),('maintenance_log_days','Transmission log retention (days)',90),('maintenance_event_days','Event retention (days)',30),('maintenance_error_days','Error retention (days)',30),('maintenance_stale_days','Stale notice grace period (days)',30),('maintenance_backup_keep','Verified backups to keep',7)] %}
+    <label>{{ label }} <input type="number" name="{{ key }}" min="1" max="{{ 100 if key == 'maintenance_backup_keep' else 3650 }}" value="{{ s.get(key,default) }}" required></label>
+    {% endfor %}
+    <button type="submit">Save maintenance settings</button>
+  </form>
+  <button class="secondary database-action" onclick="runDatabaseAction('maintenance')">Run maintenance now</button>
+  <button class="secondary database-action" onclick="runDatabaseAction('backup')">Create verified backup</button>
+  <button class="secondary database-action" onclick="runDatabaseAction('check')">Quick health check</button>
+  <button class="secondary database-action" onclick="runDatabaseAction('deep-check')">Full integrity check</button>
+  <p class="hint">Backups are stored beside the database in its .backups directory and contain full settings and history. Copy verified backups to separate storage for protection against device failure. Compaction is an offline operation; see the database maintenance documentation.</p>
+  <div id="database-action-result" aria-live="polite"></div>
+</div>
 <div class="panel">
   <h3>Live logs — application, stdout and stderr</h3>
   <p class="hint">Recent captured logs survive restart. The window retains up to 1,000 records; disk capture rotates at 1 MiB with two backups. Output before capture starts, subprocess output and native writes require <code>docker compose logs</code>. Known credential fields are redacted.</p>
@@ -130,4 +148,11 @@ function resetLogs(){logGeneration++;logCursor=0;logLines=[];show('live-logs',''
 function toggleLogs(){logPaused=!logPaused;el('log-pause').textContent=logPaused?'Resume':'Pause'}
 async function refreshLogs(){if(logPaused||logsBusy)return;logsBusy=true;const generation=logGeneration;const params=new URLSearchParams({after:logCursor,service:el('log-service').value,level:el('log-level').value,search:el('log-search').value});el('log-download').href='/troubleshoot/logs/download?'+params.toString();try{const data=await api('logs?'+params);if(generation!==logGeneration)return;logCursor=data.cursor;logLines.push(...data.rows.map(r=>local(r.ts)+' '+r.level+' '+r.service+' '+r.message));logLines=logLines.slice(-1000);const box=el('live-logs');const follow=box.scrollTop+box.clientHeight>=box.scrollHeight-30;box.textContent=logLines.join('\n');if(follow)box.scrollTop=box.scrollHeight;show('log-status',data.truncated?'Earlier records have rolled out of the bounded buffer':'Live capture active');}catch(e){show('log-status',e.message)}finally{logsBusy=false}}
 refreshDiagnostics();refreshJob();refreshLogs();setInterval(()=>{if(!document.hidden){refreshJob();refreshLogs()}},2000);setInterval(()=>{if(!document.hidden)refreshDiagnostics()},10000);
+</script>
+
+<script>
+async function refreshDatabase(){try{const d=await api('database');const x=d.storage;const last=d.last||{};const run=d.last_run||{};const b=d.last_backup||{};const c=d.last_check||{};show('database-status','Database '+x.database_bytes+' bytes · WAL '+x.wal_bytes+' bytes · Reusable '+x.reusable_bytes+' bytes · Free disk '+(x.free_disk_bytes??'unavailable')+' bytes\nProtected history records: '+x.protected_history+'\nDaily maintenance: '+(run.status||'not run')+' · '+local(run.finished)+' · Next: '+(d.next_run?local(d.next_run):'Disabled')+'\nLast action: '+(last.action||'none')+' · '+(last.status||'not run')+' · '+local(last.finished||last.started)+(last.error?'\nError: '+last.error:'')+'\nLast verified backup: '+(b.path||b.reason||'none')+' · '+local(b.check?.checked_at)+'\nLast check: '+(c.result||'not run')+' · '+(c.deep?'full':'quick')+' · '+local(c.checked_at)+'\nTable counts:\n'+Object.entries(x.table_counts).map(([name,count])=>name+': '+count).join('\n')+(run.deleted?'\nLast cleanup:\n'+Object.entries(run.deleted).map(([name,count])=>name+': '+count+' removed').join('\n'):''));document.querySelectorAll('.database-action').forEach(button=>button.disabled=d.running);}catch(e){show('database-status',e.message)}}
+async function runDatabaseAction(action){try{await api('database/action',{action});show('database-action-result','Database '+action+' started. No notices are reprocessed or transmitted.');await refreshDatabase();}catch(e){show('database-action-result',e.message)}}
+async function saveDatabaseSettings(event){event.preventDefault();const form=event.target;const data={maintenance_enabled:form.elements.maintenance_enabled.checked};for(const input of form.querySelectorAll('input[type="number"]'))data[input.name]=Number(input.value);try{await api('database/settings',data);show('database-action-result','Maintenance settings saved');await refreshDatabase();}catch(e){show('database-action-result',e.message)}}
+refreshDatabase();setInterval(refreshDatabase,10000);
 </script>

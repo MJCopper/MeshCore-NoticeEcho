@@ -20,6 +20,40 @@ def compact_text(value):
     return " ".join(unescape(re.sub(r"<[^>]*>", " ", value or "")).split()).strip(" ;.")
 
 
+# Whole classification values only. Never apply to locations or free text.
+_PLACEHOLDER_KEYS = {
+    "not applicable", "n a", "unrecognized", "unrecognised", "not supplied",
+    "unknown", "other", "notice type not supplied",
+}
+
+
+def classification_key(value):
+    return " ".join(re.findall(r"[^\W_]+", compact_text(value).casefold()))
+
+
+def transmission_label(value):
+    """Keep informative raw provider labels, even outside the catalogue."""
+    value = compact_text(value)
+    return "" if classification_key(value) in _PLACEHOLDER_KEYS else value
+
+
+def transmission_topic(values, fallback):
+    return next((label for value in values if (label := transmission_label(value))), fallback)
+
+
+def same_classification(first, second):
+    return bool(classification_key(first)) and classification_key(first) == classification_key(second)
+
+
+def without_classification_prefix(value, label):
+    """Remove only an equivalent leading label at a word/punctuation boundary."""
+    value = compact_text(value)
+    words = re.findall(r"[^\W_]+", compact_text(label))
+    if not words:
+        return value
+    pattern = r"^" + r"[\W_]+".join(re.escape(w) for w in words) + r"(?=$|[\W_])"
+    return re.sub(pattern, "", value, count=1, flags=re.I).lstrip(" :;,.-–—")
+
 def unique(values):
     result = []
     for value in values:
@@ -61,7 +95,7 @@ def brief_parts(source, action, topic, sections, optional, note, budget, notice_
                     core = (core + " for " if core else "for ") + locations
             if core:
                 bodies.append(core)
-        body = "; ".join(bodies + list(extras)) or "."
+        body = "; ".join(bodies + list(extras)) or note
         if len(body.encode()) > budget * 3:
             raise NoticeTooLong(
                 f"Formatting blocked: required {source} content exceeds 3 parts; "
@@ -104,8 +138,7 @@ def brief_bom_parts(alert, tz_name, action, budget):
     classified = classify("bom", "type", topic)
     if classified["id"] == "severe-thunderstorm-warning":
         topic = ((classified["subtype"] + " ") if classified["subtype"] else "") + classified["label"]
-    if not topic:
-        topic = "Notice type not supplied"
+    topic = transmission_topic([topic], "Weather notice")
     optional = []
     sections = []
     if alert.warning_sections:
@@ -115,7 +148,7 @@ def brief_bom_parts(alert, tz_name, action, budget):
             cancelled = section.phase == "CAN" or section.phenomenon.casefold() == "cancellation"
             when = _to_local(section.onset, tz_name)
             day = f"{when.day} {when:%b}" if when else ""
-            core = "CANCELLED" if cancelled else re.sub(r"\s+Warning$", "", section.phenomenon, flags=re.I)
+            core = "CANCELLED" if cancelled else transmission_label(re.sub(r"\s+Warning$", "", section.phenomenon, flags=re.I))
             if day:
                 core += " " + day
             sections.append((core, section.areas))

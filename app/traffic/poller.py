@@ -6,12 +6,11 @@ from ..notice_selection import evaluate, values_for, saved_values_for
 import asyncio
 import time
 import logging
-import re
 from datetime import datetime, timezone
 
 from ..config import FINAL_VERIFICATION_MESSAGE, MAX_PAYLOAD_BYTES, VERIFICATION_INTERVAL_SECONDS, polling_seconds
-from ..brief import brief_parts, compact_time, unique, NoticeTooLong
-from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice
+from ..brief import brief_parts, compact_time, unique, NoticeTooLong, transmission_label, transmission_topic, without_classification_prefix
+from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
 from ..rfs.councils import COUNCILS
 from ..rfs.feed import council_key
 from ..geography import traffic_delivery_coverage, saved_evidence, active as geographic_active
@@ -22,7 +21,11 @@ logger = logging.getLogger("wx_echo.traffic")
 
 def format_item(item, council: str, budget: int, action: str = "NEW",
                 tz_name: str = "Australia/Sydney", council_method: str = "") -> list[str]:
-    topic = item.category or item.title or "Traffic notice"
+    category = item.raw_category if item.raw_category is not None else item.category
+    provider_title = transmission_label(item.title)
+    if category and not transmission_label(category):
+        provider_title = without_classification_prefix(provider_title, category)
+    topic = transmission_topic([category, provider_title], "Traffic notice")
     if action == "ENDED":
         return brief_parts("Live Traffic NSW", action, topic,
                            [("Notice ended; road reopening unconfirmed", ", ".join(unique([item.road, item.suburb, item.road_details])))],
@@ -38,8 +41,7 @@ def format_item(item, council: str, budget: int, action: str = "NEW",
     else:
         direction_impact = impact or direction
     core = unique([direction_impact])
-    title = re.sub(r"^\s*" + re.escape(topic) + r"(?:\s+|\s*[:;,\-]\s*|$)",
-                   "", item.title, count=1, flags=re.I).strip()
+    title = without_classification_prefix(provider_title, topic)
     if title and title.casefold() not in item.impact.casefold():
         core.insert(0, title)
     scheduled = item.feed == "roadwork" or "ROADWORK" in item.category or bool(item.periods)
@@ -133,14 +135,8 @@ class TrafficPoller:
         if not settings.get("traffic_enabled", False):
             self.last_result = "disabled"
             return
-        if not geographic_active(settings) and not settings.get("traffic_all_councils") and not settings.get("traffic_councils"):
-            self.last_result = "select councils or All NSW"
-            return
         try:
-            requested = set(settings.get("traffic_types", [])) & set(TYPES)
-            if not requested:
-                self.last_result = "select hazard feeds"
-                return
+            requested = set(TYPES)
             if replay_items is not None:
                 items = replay_items
             elif isinstance(self.client, TrafficClient):
@@ -182,7 +178,6 @@ class TrafficPoller:
                                                getattr(self.client, "last_published", {}), self.last_poll)
         if feed_errors:
             self.last_result += "; " + "; ".join(f"{feed}: {error}" for feed, error in feed_errors.items())
-        types = set(settings.get("traffic_types", [])) & set(TYPES)
         dry_run = bool(settings.get("dry_run", True))
         baseline_feeds = set(self.db.get_setting("traffic_baseline_feeds", []))
         if self.db.get_setting("traffic_baseline_done", False) and not baseline_feeds:
@@ -238,6 +233,10 @@ class TrafficPoller:
                 continue
             if not force and previous and previous["last_sent_hash"] == item.revision:
                 continue
+            shared_send = self.db.traffic_provider_broadcast(item.item_id, item.revision)
+            if shared_send and (shared_send["transmit_status"] == "queued" or
+                                (not force and (dry_run or shared_send["transmit_status"] != "dry-run"))):
+                continue
             latest_send = self.db.traffic_latest_broadcast(item.item_id)
             if latest_send and latest_send["revision_hash"] == item.revision:
                 if latest_send["transmit_status"] == "queued":
@@ -250,9 +249,16 @@ class TrafficPoller:
             action = "ENDED" if is_closing else ("UPDATE" if self.db.latest_successful_broadcast("traffic", item.item_id)
                       else "NEW")
             try:
-                parts = format_item(item, council, budget, action=action,
-                                    tz_name=settings.get("display_timezone", "Australia/Sydney"),
-                                    council_method=matches[index].method)
+                parts = (recovery_parts(latest_send, item.revision, budget, force=force) if not dry_run else None)
+                if parts is None:
+                    parts = format_item(item, council, budget, action=action,
+                                        tz_name=settings.get("display_timezone", "Australia/Sydney"),
+                                        council_method=matches[index].method)
+            except RecoveryBlocked as exc:
+                if latest_send["detail"] != str(exc):
+                    self.db.update_service_history(latest_send["id"], "failed", str(exc))
+                    self.db.add_error("traffic", str(exc))
+                continue
             except NoticeTooLong as exc:
                 if not latest or latest["revision_hash"] != item.revision or latest["disposition"] != "formatting-blocked":
                     self._history(item, council, status="blocked", disposition="formatting-blocked", detail=str(exc))

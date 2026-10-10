@@ -183,6 +183,9 @@ CREATE INDEX IF NOT EXISTS idx_history_ts ON history(ts);
 CREATE INDEX IF NOT EXISTS idx_history_disp ON history(disposition);
 CREATE INDEX IF NOT EXISTS idx_history_alert_id ON history(alert_id, id);
 CREATE INDEX IF NOT EXISTS idx_txlog_ts ON transmit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_errors_ts ON errors(ts);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_rfs_last_seen ON rfs_incidents(last_seen);
 """
 
 
@@ -557,8 +560,10 @@ class Database:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=STATE_EXPIRY_HOURS)
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM alert_state WHERE expires IS NOT NULL "
-                "AND expires != '' AND expires < ?",
+                "DELETE FROM alert_state WHERE julianday(expires)<julianday(?) "
+                "AND NOT EXISTS (SELECT 1 FROM bom_current b WHERE b.alert_id=alert_state.alert_id) "
+                "AND NOT EXISTS (SELECT 1 FROM service_history h WHERE h.source='bom' "
+                "AND h.external_id=alert_state.alert_id AND h.transmit_status IN ('queued','deferred','failed','interrupted'))",
                 (cutoff.isoformat(),),
             )
             self._conn.commit()
@@ -784,7 +789,8 @@ class Database:
     def prune_history(self, keep_days: int = 90) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat(timespec="seconds")
         with self._lock:
-            cur = self._conn.execute("DELETE FROM service_history WHERE ts < ?", (cutoff,))
+            from .maintenance import PROTECTED
+            cur = self._conn.execute(f"DELETE FROM service_history WHERE ts < ? AND NOT ({PROTECTED})", (cutoff,))
             self._conn.commit()
             return cur.rowcount
 
@@ -840,6 +846,20 @@ class Database:
             return self._conn.execute(
                 "SELECT * FROM service_history WHERE source = 'traffic' AND external_id = ? "
                 "AND transmit_status IS NOT NULL ORDER BY id DESC LIMIT 1", (item_id,),
+            ).fetchone()
+
+    def traffic_provider_broadcast(self, item_id: str, revision: str):
+        """Suppress an identical provider revision if its preferred feed changes."""
+        from .traffic.feed import TYPES
+        provider = item_id.partition(":")[2]
+        ids = [f"{feed}:{provider}" for feed in TYPES]
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM service_history WHERE source = 'traffic' "
+                "AND external_id IN (" + ",".join("?" for _ in ids) + ") "
+                "AND revision_hash = ? AND transmit_status IN "
+                "('queued', 'success', 'repeat_confirmed', 'unconfirmed', 'dry-run') "
+                "ORDER BY id DESC LIMIT 1", (*ids, revision),
             ).fetchone()
 
     def traffic_recover_queued(self) -> int:

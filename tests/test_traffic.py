@@ -266,7 +266,7 @@ async def test_fire_feed_is_requested_and_delivered_with_rfs_enabled(monkeypatch
         return True
     tx.enqueue_notice=enqueue_notice
     await TrafficPoller(db,tx,TrafficClient()).poll_once()
-    assert requested==[{"fire"}]
+    assert requested==[{"incident", "roadwork", "fire", "flood", "regional"}]
     assert tx.sent and guards[0]()
     assert "Northbound road closed" in " ".join(p[0] for p in tx.sent[0])
     assert db.latest_service_history("traffic",event.item_id)["transmit_status"]=="queued"
@@ -275,14 +275,14 @@ async def test_fire_feed_is_requested_and_delivered_with_rfs_enabled(monkeypatch
 
 @pytest.mark.parametrize("enabled,selected,expected",[
     (False,True,"Service disabled"),
-    (True,False,"Feed not selected"),
-    (True,True,"Selected; awaiting first poll"),
+    (True,False,"Awaiting first poll"),
+    (True,True,"Awaiting first poll"),
 ])
 def test_fire_feed_diagnostics_with_rfs_enabled(enabled,selected,expected):
     from app.presentation import traffic_feed_status
     requested,label=traffic_feed_status({"traffic_enabled":enabled,
         "traffic_types":["fire"] if selected else [],"rfs_enabled":True},"fire","")
-    assert requested is (enabled and selected)
+    assert requested is enabled
     assert label==expected
 
 
@@ -317,3 +317,58 @@ def test_repeated_breakdown_prefix_is_removed_without_losing_vehicle_detail():
     assert text.count("BREAKDOWN")==1
     assert "B-double" in text and "Northbound affected" in text
     assert "Pacific Highway" in text and "Gosford" in text
+
+
+@pytest.mark.parametrize("feed", ["incident", "roadwork", "fire", "flood", "regional"])
+def test_category_only_selection_ignores_old_feed_gate(feed):
+    from app.notice_selection import proposal, grouped_policy, evaluate, adopt_catalogue
+    settings = {"traffic_types": []}
+    policy = grouped_policy("traffic", proposal("traffic", settings))
+    settings["traffic_notice_selection"] = policy
+    values = {"feed": feed, "category": "EMERGENCY ROADWORK"}
+    assert not evaluate("traffic", values, settings).included
+    policy["traffic_feed_mode"] = "categories"
+    assert evaluate("traffic", values, settings).included
+    assert adopt_catalogue("traffic", policy)["traffic_feed_mode"] == "categories"
+    assert not evaluate("traffic", values | {"feed": "invalid"}, settings).included
+
+
+@pytest.mark.asyncio
+async def test_feed_preference_change_does_not_repeat_same_revision(tmp_path):
+    db = Database(tmp_path / "traffic.db")
+    configure(db, dry_run=True)
+    event = item()
+    client = Client([event])
+    poller = TrafficPoller(db, Tx(), client)
+    await poller.poll_once()
+    copy = replace(event, item_id="flood:1", feed="flood")
+    assert copy.revision == event.revision
+    client.items = [copy]
+    await poller.poll_once()
+    assert db.traffic_latest_broadcast(copy.item_id) is None
+    await poller.poll_once(replay_items=[copy], force=True)
+    assert db.traffic_latest_broadcast(copy.item_id)["transmit_status"] == "dry-run"
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_collect_all_feeds_with_empty_legacy_selection(tmp_path, monkeypatch):
+    from app.traffic.feed import TrafficClient, TYPES
+    db = Database(tmp_path / "traffic.db")
+    configure(db, dry_run=True)
+    db.set_setting("traffic_types", [])
+    db.set_setting("traffic_councils", [])
+    requested = []
+    async def fetch(self, feeds):
+        requested.append(set(feeds))
+        return [item()]
+    async def boundaries(self):
+        return POLYGONS
+    monkeypatch.setattr(TrafficClient, "fetch", fetch)
+    monkeypatch.setattr(TrafficClient, "boundaries", boundaries)
+    client = TrafficClient()
+    await TrafficPoller(db, Tx(), client).poll_once()
+    assert requested == [set(TYPES)]
+    assert db.traffic_get_item("incident:1") is not None
+    assert db.traffic_latest_broadcast("incident:1") is None
+    db.close()

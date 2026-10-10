@@ -118,3 +118,58 @@ async def bundle(request: Request):
               logs=request.app.state.process_logs.query(),job=manager(request).job)
     return Response(json.dumps(redact(data),indent=2),media_type='application/json',
                     headers={'Content-Disposition':'attachment; filename="noticeecho-diagnostics.json"'})
+
+
+class DatabaseAction(BaseModel):
+    action: Literal['maintenance','backup','check','deep-check'] = 'maintenance'
+
+
+class MaintenanceSettings(BaseModel):
+    maintenance_enabled: bool = True
+    maintenance_history_days: int = 90
+    maintenance_log_days: int = 90
+    maintenance_event_days: int = 30
+    maintenance_error_days: int = 30
+    maintenance_stale_days: int = 30
+    maintenance_backup_keep: int = 7
+
+    model_config = {"extra": "forbid"}
+
+
+def database_manager(request):
+    from ..maintenance import Maintenance
+    if not hasattr(request.app.state, 'maintenance'):
+        request.app.state.maintenance = Maintenance(request.app.state.db)
+    return request.app.state.maintenance
+
+
+@router.get('/database')
+async def database_status(request: Request):
+    return await database_manager(request).status()
+
+
+@router.post('/database/action')
+async def database_action(request: Request, body: DatabaseAction):
+    try:
+        return database_manager(request).trigger(body.action)
+    except RuntimeError as exc:
+        raise HTTPException(409,str(exc))
+
+
+@router.post('/database/settings')
+async def database_settings(request: Request, body: MaintenanceSettings):
+    values=body.model_dump()
+    for key,value in values.items():
+        if key != 'maintenance_enabled' and not 1 <= value <= (100 if key=='maintenance_backup_keep' else 3650):
+            raise HTTPException(422,'Retention must be 1–3650 days; backup count must be 1–100')
+    db=request.app.state.db
+    with db._lock:
+        try:
+            for key,value in values.items():
+                db._conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,json.dumps(value)))
+            db._conn.commit()
+        except Exception:
+            db._conn.rollback()
+            raise
+    db.add_event('INFO','Database maintenance settings saved')
+    return {'saved':True,'settings':values}

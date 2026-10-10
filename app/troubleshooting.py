@@ -53,7 +53,7 @@ def current(db, source):
 def fingerprint(db, sources):
     values = {source: current(db, source) for source in sources}
     # Include dedupe/baseline state: a preview must not outlive another completed delivery.
-    values['settings'] = db.all_settings()
+    values['settings'] = {key:value for key,value in db.all_settings().items() if not key.startswith('maintenance_')}
     values['history'] = rows(db, 'SELECT MAX(id) AS id FROM service_history')
     values['state'] = rows(db, 'SELECT * FROM alert_state ORDER BY alert_id')
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
@@ -364,6 +364,7 @@ def diagnostics(app):
     return redact(dict(version=__version__,started=getattr(app.state,'started_at',''),uptime_seconds=int(time.time()-getattr(app.state,'started_epoch',time.time())),
                        restart_count=db.get_setting('diagnostic_restart_count',0),previous_start=db.get_setting('diagnostic_previous_start',''),dry_run=settings.get('dry_run',True),
                        database=dict(path=db.path,bytes=path.stat().st_size if path.is_file() else 0,writable=writable,
+                                     maintenance={"last":settings.get("maintenance_last",{}),"last_backup":settings.get("maintenance_last_backup",{}),"last_check":settings.get("maintenance_last_check",{})},
                                      migrations=rows(db,'SELECT name FROM history_migrations'),sqlite_version=rows(db,'SELECT sqlite_version() AS version')[0]['version']),
                        services=services,traffic_feeds=feeds,queue=queue_info,radios=tx.status(),
                        recent_errors=[dict(r) for r in db.recent_errors(20)],

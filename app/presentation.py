@@ -24,14 +24,11 @@ def freshness(stamp: str, minutes: int, enabled: bool = True) -> str:
 def traffic_feed_status(settings, name, last_success):
     """Explain feed selection independently of RFS incident monitoring."""
     enabled = bool(settings.get("traffic_enabled", False))
-    selected = name in settings.get("traffic_types", [])
-    requested = enabled and selected
+    requested = enabled
     if not enabled:
         label = "Service disabled"
-    elif not selected:
-        label = "Feed not selected"
     elif not last_success:
-        label = "Selected; awaiting first poll"
+        label = "Awaiting first poll"
     else:
         label = freshness(last_success, settings.get("traffic_poll_minutes", 10))
     return requested, label

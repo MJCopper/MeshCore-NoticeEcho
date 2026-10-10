@@ -7,7 +7,7 @@
 {% include "_geographic_summary.html" %}
 <form id="service-settings" method="post" action="/settings/traffic">
 <input type="hidden" name="preserve_notice_selection" value="1">
-<div class="panel"><h3>Monitoring</h3><label class="chk"><input type="checkbox" name="traffic_enabled" value="1" {% if s.traffic_enabled %}checked{% endif %}> Enable Live Traffic NSW monitoring</label><h4>Hazard feeds</h4><div class="checkgrid">{% for item in types %}<label class="chk"><input type="checkbox" name="traffic_types" value="{{ item }}" {% if item in selected_types %}checked{% endif %}> {{ item|title }}{% if item == 'regional' %} (local council roads){% endif %}</label>{% endfor %}</div><p class="hint">Regional roadworks require Roadwork to be selected. Fire provides fire-related road impacts alongside RFS.</p></div>
+<div class="panel"><h3>Monitoring</h3><label class="chk"><input type="checkbox" name="traffic_enabled" value="1" {% if s.traffic_enabled %}checked{% endif %}> Enable Live Traffic NSW monitoring</label><p class="hint">All five provider feeds are collected when monitoring is enabled. Categories and geographic coverage control transmission. Feed health is shown on the current notices page.</p></div>
 </form>
 {% include "_notice_selection_settings.html" %}
 <div class="panel"><h3>Polling</h3><label>Poll interval (minutes, minimum 5)</label>

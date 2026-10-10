@@ -9,6 +9,10 @@
 {% if active_policy and active_policy.catalogue != latest %}
 <label>Catalogue <select name="catalogue"><option value="active">Keep displayed catalogue version {{ policy.catalogue.version }}</option><option value="latest" {% if policy.catalogue == latest %}selected{% endif %}>Adopt current catalogue version {{ latest.version }} explicitly</option></select></label>
 {% else %}<input type="hidden" name="catalogue" value="{{ 'active' if active_policy else 'latest' }}">{% endif %}
+{% if service == 'traffic' %}
+{% if policy.traffic_feed_mode == 'categories' %}<input type="hidden" name="traffic_feed_mode" value="categories"><p>Categories control transmission across all feeds, including regional roadworks.</p>
+{% else %}<label class="chk"><input type="checkbox" name="traffic_feed_mode" value="categories"> Apply category-only transmission filtering across all feeds</label><p class="hint">Existing feed restrictions remain active until this is applied. Previously selected feeds: {{ s.traffic_types|join(', ') or 'none' }}. Preview coverage changes before saving. All feeds are collected regardless of these retained restrictions.</p>{% endif %}
+{% endif %}
 <label>Find classifications <input type="search" id="classification-search" placeholder="Type a name or provider variant"></label>
 {% for dim, entries in policy.catalogue.dimensions.items() %}
 <section><h4>{{ {'type':'Notice type','level':'Alert level','kind':'Incident type','category':'Category'}[dim] }}</h4>

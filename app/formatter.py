@@ -240,7 +240,8 @@ def frame_notice(source: str, action: str, topic: str, sections: list,
         bodies.append(content)
         previous = (part_action, part_topic)
     note = source_note.strip(" ;")
-    bodies[-1] = bodies[-1].rstrip(" .;") + "; " + note
+    if note and bodies[-1].strip(" .;") != note:
+        bodies[-1] = bodies[-1].rstrip(" .;") + "; " + note
     reference = hashlib.sha256(notice_id.encode("utf-8")).hexdigest()[:4].upper()
     estimate = 1
     for _ in range(30):
