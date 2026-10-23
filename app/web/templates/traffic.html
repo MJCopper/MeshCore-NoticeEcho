@@ -4,17 +4,20 @@
 <h2>Live Traffic NSW</h2>
 <div class="panel">
   <p class="hint">Source: <a href="https://www.livetraffic.com/">Transport for NSW Live Traffic</a>. Data © Transport for NSW, from the <a href="https://data.nsw.gov.au/data/dataset/2-live-traffic-hazards">Live Traffic Hazards dataset</a>. This unofficial relay may be delayed or incomplete. Check the source for current road information.</p>
-  <p><b>Feed:</b> {{ feed_status }}{% if last_poll %} · Last checked {{ last_poll|localtime(tz) }}{% endif %}</p>
-  {% if feeds %}<table><thead><tr><th>Feed</th><th>Last successful fetch</th><th>Provider publication</th><th>Health</th></tr></thead><tbody>
+  {% include "_source_health.html" %}
+  {% if feeds %}<div class="source-table-scroll" role="region" aria-label="Traffic feed health" tabindex="0"><table><thead><tr><th>Feed</th><th>Last successful fetch</th><th>Provider publication</th><th>Health</th></tr></thead><tbody>
     {% for feed in feeds %}<tr><td>{{ feed.feed }}</td><td>{{ feed.last_success|localtime(tz) or 'Never' }}</td><td>{{ feed.published|localtime(tz) or 'Not supplied' }}</td><td>{{ feed.freshness }}{% if feed.error %}<br>{{ feed.error }}{% endif %}</td></tr>{% endfor %}
-  </tbody></table>{% endif %}
+  </tbody></table>
+  </div>{% endif %}
   <p class="hint">Council matching uses a simplified boundary snapshot from 1 October 2026. A feed point cannot establish the footprint of an entire road closure. A current notice does not confirm a closure is happening now.</p>
 </div>
 <p><a href="/settings/traffic">Traffic settings</a> · <a href="/history?source=traffic">Traffic history</a></p>
 <div class="panel" style="margin-top:18px;">
-  <h3>Saved traffic notices</h3>
+  <h3>{{ pagination.view_label }} traffic notices</h3>
+  {% include "_source_views.html" %}
   {% if incidents %}
   {% include "_current_pagination.html" %}
+  <div class="source-table-scroll" role="region" aria-label="TRAFFIC notice details" tabindex="0">
   <table><thead><tr><th>Type</th><th>Item</th><th>Council</th><th>State</th></tr></thead><tbody>
   {% for i in incidents %}<tr><td>{{ i.feed }} · {{ i.category }}</td><td>{{ i.title }}<br><span class="hint">{{ i.road }}{% if i.suburb %}, {{ i.suburb }}{% endif %}</span>
     {% if i.data.road_details %}<br>{{ i.data.road_details }}{% endif %}
@@ -28,10 +31,11 @@
     {% if i.data.start %}<p class="hint">Notice starts {{ i.data.start|epochlocal(tz) }}</p>{% endif %}
     {% if i.data.end and not i.data.hide_end %}<p class="hint">Notice ends {{ i.data.end|epochlocal(tz) }}</p>{% endif %}
   </td><td>{{ i.council or 'Unmatched' }}<br><span class="hint">{{ i.data.match_method or 'Method not recorded' }}</span>{% if i.data.match_reason %}<p class="hint">{{ i.data.match_reason }}</p>{% endif %}{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with notice = i.notice %}{% include "_notice_evidence.html" %}{% endwith %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td>
-  <td>{{ 'Current notice at last observation' if i.current_now else 'Ended, future or absent notice' }}{% if i.missing_polls %}<br>Absent from {{ i.missing_polls }} successful feed poll(s); road status unconfirmed{% endif %}
+  <td>{% with entry = i %}{% include "_source_item_status.html" %}{% endwith %}{% if i.missing_polls %}<br>Absent from {{ i.missing_polls }} successful feed poll(s); road status unconfirmed{% endif %}
     <p class="hint">{{ i.closure_state }}</p><p class="hint">{{ i.freshness }} · Observed {{ i.last_seen|localtime(tz) }}</p></td></tr>{% endfor %}
   </tbody></table>
+  </div>
   {% include "_current_pagination.html" %}
-  {% else %}<p class="hint">No traffic items loaded. The feeds are checked when monitoring is enabled.</p>{% endif %}
+  {% else %}{% include "_source_empty.html" %}{% endif %}
 </div>
 {% endblock %}

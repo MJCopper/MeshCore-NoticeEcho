@@ -1,0 +1,3 @@
+<p><b>{{ entry.lifecycle_label }}</b>{% if entry.lifecycle == 'absent' %} — road or incident resolution unconfirmed{% endif %}</p>
+<p class="hint">Last observed {{ entry.catalogue_last_seen|localtime(tz) if entry.catalogue_last_seen else 'Not recorded' }}{% if entry.missing_since %} · First observed absent {{ entry.missing_since|localtime(tz) }}{% endif %}.</p>
+{% if entry.catalogue_imported %}<p class="hint">Imported saved evidence; feed presence has not yet been rechecked.</p>{% endif %}

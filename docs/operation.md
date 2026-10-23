@@ -83,3 +83,7 @@ Companion settings and troubleshooting show UTC/local display time, drift and un
 
 
 General settings includes **Safety warning interval (minutes)**, default 5, accepting whole minutes from 1 to 1,440. It is the minimum time between safety warnings after notice transmissions, not an idle periodic broadcast. BOM, RFS and Traffic share the live cooldown for each channel; dry-run timing is separate. Changes apply to the next queue decision without restart; an already queued warning keeps its place at the end of the notice queue.
+
+## Unified source-page views
+
+BOM, RFS and Traffic default to Current, with Upcoming, Past and All saved views using one lifecycle rule. Failed feeds retain last-known observations; the first successful missing poll removes an item from Current without implying resolution. Counts are filtered before pagination. These display rules do not change notice delivery, retries, cancellation handling or database retention. See [current items](current-items.md) for lifecycle, freshness, upgrade and retention details.

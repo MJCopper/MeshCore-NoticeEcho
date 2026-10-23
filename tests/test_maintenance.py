@@ -350,7 +350,7 @@ async def test_shutdown_during_scheduler_settings_read_does_not_start_work(db):
 
 
 @pytest.mark.asyncio
-async def test_database_settings_has_own_page_and_troubleshoot_link(environment):
+async def test_database_settings_has_own_page_without_troubleshoot_panel(environment):
     from app.web.routes import router as web_router
     app = environment
     app.include_router(web_router)
@@ -368,7 +368,8 @@ async def test_database_settings_has_own_page_and_troubleshoot_link(environment)
         assert "async function api(" in page.text
         troubleshoot = await client.get('/troubleshoot')
         assert troubleshoot.status_code == 200
-        assert 'href="/settings/database"' in troubleshoot.text
+        assert 'href="/settings/database"' not in troubleshoot.text
+        assert 'id="database-maintenance"' not in troubleshoot.text
         assert 'id="database-settings"' not in troubleshoot.text
         assert 'async function refreshDatabase()' not in troubleshoot.text
         assert not app.state.tx.sent

@@ -32,3 +32,18 @@ def traffic_feed_status(settings, name, last_success):
     else:
         label = freshness(last_success, settings.get("traffic_poll_minutes", 5))
     return requested, label
+
+
+def listing_status(db, source, pagination, settings, last_attempt, result):
+    """Keep source health independent of an item's lifecycle classification."""
+    enabled = bool(settings.get(source + "_enabled", source == "bom"))
+    snapshots = pagination["snapshots"]
+    last_success = max((row["last_success"] for row in snapshots), default="")
+    if not last_success:
+        last_success = settings.get(source + "_last_successful_poll", "")
+    if not last_success and source == "bom":
+        last_success = max((row["fetched_at"] for row in db.bom_snapshot_regions(["NSW"])), default="")
+    return dict(enabled=enabled, last_attempt=last_attempt, last_success=last_success,
+                has_snapshot=bool(last_success), result=result,
+                fetch_problem=str(result).lower().startswith(("error", "partial")),
+                freshness=freshness(last_success, settings.get(source + "_poll_minutes", 5), enabled))

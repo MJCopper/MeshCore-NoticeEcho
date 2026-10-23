@@ -11,7 +11,8 @@ from ..rfs.councils import COUNCILS
 from ..web.routes import render
 from .feed import TYPES
 from .schedule import ClosurePeriod, window_state
-from ..presentation import freshness, traffic_feed_status
+from ..presentation import freshness, traffic_feed_status, listing_status
+from ..catalogue import View
 from ..notice_selection import current_evidence
 import time
 
@@ -19,25 +20,23 @@ router = APIRouter()
 
 
 @router.get("/traffic", response_class=HTMLResponse)
-async def traffic_page(request: Request, page: int = Query(1, ge=1)):
+async def traffic_page(request: Request, page: int = Query(1, ge=1), view: View = Query("current")):
     db = request.app.state.db
     poller = request.app.state.traffic_poller
-    rows, pagination = db.current_listing("traffic", page)
+    rows, pagination = db.current_listing("traffic", page, view=view)
     incidents = [dict(row) | {"data": json.loads(row["normalized_data"])}
                  for row in rows]
     s = db.all_settings()
     from ..web.geography_routes import saved_decisions
-    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, s, ("traffic",)) if x["source"] == "traffic"}
+    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, s, ("traffic",), listing_rows={"traffic": rows}) if x["source"] == "traffic"}
     for item in incidents:
         item["coverage"] = decisions.get(item["item_id"])
         data = item["data"]
         item["schedule"] = [ClosurePeriod(**p).describe() for p in data.get("periods", [])]
         item["freshness"] = freshness(item["last_seen"], s.get("traffic_poll_minutes", 5), s.get("traffic_enabled", False))
-        item["current_now"] = bool(item["active"] and not data.get("ended") and
-                                    (data.get("start") is None or data["start"] <= time.time()) and
-                                    (data.get("end") is None or data["end"] > time.time()))
+        item["current_now"] = item["lifecycle"] == "current"
         item["notice"] = current_evidence("traffic", {"feed": item["feed"], "category": data.get("raw_category") if data.get("raw_category") is not None else item["category"]}, s, item["coverage"], item["current_now"] and item["missing_polls"] < 2)
-        item["closure_state"] = (window_state(tuple(ClosurePeriod(**p) for p in data.get("periods", [])), time.time())[1]
+        item["closure_state"] = (window_state(tuple(ClosurePeriod(**p) for p in data.get("periods", [])), pagination["now"])[1]
                                  if item["current_now"] else "Notice is not currently active; closure status is unconfirmed")
     feeds = []
     saved_feeds = {row["feed"]: dict(row) for row in db.traffic_feed_status()}
@@ -47,7 +46,8 @@ async def traffic_page(request: Request, page: int = Query(1, ge=1)):
         feeds.append(record)
     return render(request, "traffic.html", incidents=incidents,
                   feed_status=poller.last_result, last_poll=poller.last_poll,
-                  pagination=pagination, feeds=feeds)
+                  pagination=pagination, feeds=feeds,
+                  source_listing=listing_status(db, "traffic", pagination, s, poller.last_poll, poller.last_result))
 
 
 @router.get("/settings/traffic", response_class=HTMLResponse)

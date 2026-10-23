@@ -1,0 +1,7 @@
+<div class="source-health" role="status">
+  <p><b>Monitoring:</b> {{ 'Enabled' if source_listing.enabled else 'Disabled — showing saved observations' }}
+    · <b>Last attempted fetch:</b> {{ source_listing.last_attempt|localtime(tz) if source_listing.last_attempt else 'Not yet' }}
+    · <b>Latest successful fetch:</b> {{ source_listing.last_success|localtime(tz) if source_listing.last_success else 'Not yet' }}</p>
+  <p class="hint">{{ source_listing.freshness }}.</p>
+  <p class="{{ 'source-fetch-error' if source_listing.fetch_problem else 'hint' }}">Feed result: {{ source_listing.result }}.</p>
+</div>

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Meshcore NoticeEcho{% block title %}{% endblock %}</title>
-  <link rel="icon" type="image/png" href="{{ request.url_for('favicon_png') }}">
-  <link rel="icon" type="image/x-icon" href="{{ request.url_for('favicon_ico') }}">
+  <link rel="icon" type="image/png" href="{{ request.scope.get('root_path', '').rstrip('/') }}/static/favicon.png">
+  <link rel="icon" type="image/x-icon" href="{{ request.scope.get('root_path', '').rstrip('/') }}/static/favicon.ico">
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <style>
     :root{
@@ -73,7 +73,7 @@
     .upd-link:hover{text-decoration:underline;}
 
     /* main */
-    main{padding:26px 30px 44px;max-width:1180px;}
+    main{min-width:0;padding:26px 30px 44px;max-width:1180px;}
     h2{font-size:22px;margin:2px 0 20px;letter-spacing:-.01em;}
     h3{font-size:15px;margin:0 0 12px;}
 
@@ -242,6 +242,13 @@
     .transmission-dependent{margin-left:24px;}
     .transmission-dependent.is-disabled{opacity:.55;}
     .transmission-dependent input:disabled{cursor:not-allowed;}
+    .source-table-scroll{overflow-x:auto;max-width:100%;}
+    .source-fetch-error{color:var(--bad-text);font-weight:600;}
+    .source-table-scroll table{min-width:840px;}
+    .source-table-scroll:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+    .source-views{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0;}
+    .source-views a{padding:8px 12px;border:1px solid var(--line);border-radius:9px;text-decoration:none;background:var(--inset);}
+    .source-views a[aria-current="page"]{border-color:var(--accent);color:var(--ink);font-weight:700;}
     .grp-title{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
       font-weight:600;margin:16px 0 7px;}
     .fld-lbl{display:block;margin:14px 0 6px;color:var(--muted);font-size:13px;font-weight:500;}
@@ -281,7 +288,7 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <a href="/" aria-label="NoticeEcho dashboard"><img class="brand-logo" src="{{ request.url_for('brand_logo') }}" alt="MeshCore NoticeEcho" width="2172" height="724"></a>
+        <a href="/" aria-label="NoticeEcho dashboard"><img class="brand-logo" src="{{ request.scope.get('root_path', '').rstrip('/') }}/static/noticeecho-logo.png" alt="MeshCore NoticeEcho" width="2172" height="724"></a>
       </div>
       <nav>
         <a href="/"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>Dashboard</a>

@@ -1,0 +1,7 @@
+{% if not source_listing.enabled %}
+<p class="hint">Monitoring is disabled. No saved {{ pagination.view_label|lower }} items match this view.</p>
+{% elif not source_listing.has_snapshot %}
+<p class="hint">No successful fetch has been recorded. Saved items with unconfirmed presence are available in All saved; check the feed status above.</p>
+{% else %}
+<p class="hint">No {{ pagination.view_label|lower }} items in the last saved observations. Other views may contain retained notices; this does not confirm conditions are safe.</p>
+{% endif %}

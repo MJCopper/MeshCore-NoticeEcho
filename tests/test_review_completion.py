@@ -288,6 +288,8 @@ def test_paginated_source_pages_expose_all_511_records_and_clamp_page(source, pa
         for i in range(511):
             db.traffic_save_item(item(f"item-{i:04}", title=f"item-{i:04}"), "Tamworth Regional", True)
     app = FastAPI()
+    if router is not bom_router:
+        app.include_router(bom_router)
     app.include_router(router)
     app.state.db = db
     app.state.tx = TestRadio()

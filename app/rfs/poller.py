@@ -134,7 +134,7 @@ class RFSPoller:
                 return
             previous = self.db.rfs_get_incident(incident.incident_id)
             if replay_items is None:
-                self.db.rfs_save_incident(incident, incident.revision)
+                self.db.rfs_save_incident(incident, incident.revision, catalogue_observation=False)
             coverage = incident_delivery_coverage(incident, settings, self.db)
             closing = coverage.method == "previous transmission"
             selection = evaluate("rfs", values_for("rfs", incident), settings)

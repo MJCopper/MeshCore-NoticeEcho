@@ -221,7 +221,7 @@ class TrafficPoller:
             previous = self.db.traffic_get_item(item.item_id)
             active = item.active()
             if replay_items is None:
-                self.db.traffic_save_item(item, council, active, matches[index])
+                self.db.traffic_save_item(item, council, active, matches[index], catalogue_observation=False)
             reason = exclusion(item, council)
             if not reason and preferred[item.item_id.partition(":")[2]].item_id != item.item_id:
                 reason = "duplicate provider item"

@@ -60,7 +60,7 @@ docker compose up -d --build
 Settings and history persist in `data/noticeecho.db`. Keep the `data/` directory when moving or reinstalling. To back up the Docker database:
 
 ```bash
-docker compose exec -T wx-echo python -m app.maintenance backup --database /data/noticeecho.db
+docker compose exec -T notice-echo python -m app.maintenance backup --database /data/noticeecho.db
 ```
 
 Daily maintenance and verified backups are configurable under Settings → Database Maintenance. See [database maintenance](docs/database-maintenance.md) for retention, restore and offline compaction.

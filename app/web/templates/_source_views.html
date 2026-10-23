@@ -1,0 +1,10 @@
+<div class="source-views" role="navigation" aria-label="Notice views">
+  {% for key, label in [('current','Current'),('upcoming','Upcoming'),('past','Past'),('all','All saved')] %}
+  <a href="?view={{ key }}" {% if pagination.view == key %}aria-current="page"{% endif %}>{{ label }} ({{ pagination.counts[key] }})</a>
+  {% endfor %}
+</div>
+<p class="hint">Current means present in the last successful feed snapshot and not ended, cancelled, expired or future-dated. Feed presence is separate from geographic coverage and transmission selection. Disappearance does not confirm an all-clear.</p>
+{% if pagination.counts.all > pagination.counts.current + pagination.counts.upcoming + pagination.counts.past %}
+<p class="hint">Some imported saved items have unconfirmed feed presence. Find them in All saved until the next successful poll establishes their state.</p>
+{% endif %}
+{% if pagination.view in ('past','all') %}<p class="hint">This catalogue retains the latest saved version of each item, subject to Database Maintenance retention. Earlier revisions and delivery decisions are in History. Older BOM snapshots unavailable at upgrade cannot be reconstructed.</p>{% endif %}

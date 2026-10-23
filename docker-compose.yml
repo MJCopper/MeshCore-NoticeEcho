@@ -1,6 +1,5 @@
 services:
-  # Service key retained so existing Compose overrides keep working.
-  wx-echo:
+  notice-echo:
     image: noticeecho:local
     build: .
     container_name: notice-echo

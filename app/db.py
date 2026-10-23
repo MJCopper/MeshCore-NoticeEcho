@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .config import DEFAULT_SETTINGS, STATE_EXPIRY_HOURS
+from . import catalogue
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -193,6 +194,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+SCHEMA += catalogue.SCHEMA
+
+
 class Database:
     def __init__(self, path: str):
         self.path = path
@@ -200,6 +204,7 @@ class Database:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.create_function("notice_lifecycle", 6, catalogue.lifecycle, deterministic=True)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -211,6 +216,7 @@ class Database:
         self.fresh_install = not bool(self._conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone())
         self._seed_settings()
         self._migrate_notice_groups()
+        self._upgrade_catalogue()
 
     def _migrate_notice_groups(self):
         from .notice_selection import grouped_policy, validate
@@ -450,7 +456,7 @@ class Database:
         successful_regions = successful_regions & {"NSW"}
         if not successful_regions:
             return
-        with self._lock:
+        with self._lock, self._conn:
             for region in successful_regions:
                 self._conn.execute("DELETE FROM bom_current WHERE region = ?", (region,))
                 self._conn.execute(
@@ -491,6 +497,8 @@ class Database:
                 )
                 self._conn.execute("UPDATE bom_current SET raw_data=? WHERE region=? AND alert_id=?",
                                    (json.dumps(item), region, item["id"]))
+            rows = self._conn.execute("SELECT * FROM bom_current WHERE region='NSW'").fetchall()
+            self._catalogue_snapshot("bom", rows, successful_regions, fetched_at)
             self._conn.commit()
 
     def bom_current_items(self, regions: list[str], limit: int = 500):
@@ -813,7 +821,7 @@ class Database:
         with self._lock:
             return self._conn.execute("SELECT * FROM traffic_items WHERE item_id = ?", (item_id,)).fetchone()
 
-    def traffic_save_item(self, item, council: str, active: bool, match=None) -> None:
+    def traffic_save_item(self, item, council: str, active: bool, match=None, *, catalogue_observation=True) -> None:
         selection = notice_evaluate("traffic", notice_values("traffic", item), self.all_settings()).metadata()
         with self._lock:
             self._conn.execute(
@@ -834,6 +842,9 @@ class Database:
                 data.update(match_method=match.method, match_reason=match.reason)
             self._conn.execute("UPDATE traffic_items SET normalized_data=? WHERE item_id=?",
                                (json.dumps(data), item.item_id))
+            if catalogue_observation:
+                row = self._conn.execute("SELECT * FROM traffic_items WHERE item_id=?", (item.item_id,)).fetchone()
+                self._catalogue_upsert("traffic", row, present=1)
             self._conn.commit()
 
     def traffic_mark_sent(self, item_id: str, revision: str) -> None:
@@ -873,7 +884,7 @@ class Database:
             return cur.rowcount
 
     def traffic_missing_after_poll(self, seen_ids: set[str], successful_feeds: set[str] | None = None) -> list[dict]:
-        with self._lock:
+        with self._lock, self._conn:
             rows = self._conn.execute("SELECT * FROM traffic_items").fetchall()
             missing = [row for row in rows if row["item_id"] not in seen_ids
                        and (successful_feeds is None or row["feed"] in successful_feeds)]
@@ -882,6 +893,8 @@ class Database:
                     "UPDATE traffic_items SET missing_polls = missing_polls + 1, active = 0 WHERE item_id = ?",
                     (row["item_id"],),
                 )
+            self._catalogue_snapshot("traffic", [row for row in rows if row["item_id"] in seen_ids],
+                                     successful_feeds if successful_feeds is not None else {row["feed"] for row in rows}, _now())
             self._conn.commit()
             return [dict(row) | {"missing_polls": row["missing_polls"] + 1} for row in missing]
 
@@ -909,25 +922,81 @@ class Database:
         with self._lock:
             return self._conn.execute("SELECT * FROM traffic_feed_status ORDER BY feed").fetchall()
 
-    def current_listing(self, source: str, page: int, page_size: int = 50):
-        """Paginate complete saved source listings with stable ordering."""
-        table, where, order = {
-            "bom": ("bom_current", "region='NSW'", "issued DESC, alert_id"),
-            "rfs": ("rfs_incidents", "missing_polls<2", "CASE level WHEN 'Emergency Warning' THEN 0 WHEN 'Watch and Act' THEN 1 ELSE 2 END, name, incident_id"),
-            "traffic": ("traffic_items", "1=1", "active DESC, last_seen DESC, item_id"),
-        }[source]
+    def _catalogue_upsert(self, source, row, *, present=1, imported=False, snapshot_id=""):
+        facts = catalogue.adapt(source, row)
+        first_seen = None if imported else facts["last_seen"]
+        columns = ("source", "feed", "item_id", "payload", "present", "cancelled", "ended",
+                   "starts_at", "expires_at", "first_seen", "last_seen", "missing_polls",
+                   "snapshot_id", "imported", "priority", "sort_time")
+        values = (source, facts["feed"], facts["item_id"], json.dumps(dict(row)), present,
+                  int(facts["cancelled"]), int(facts["ended"]), facts["starts_at"], facts["expires_at"],
+                  first_seen, facts["last_seen"], dict(row).get("missing_polls", 0) if imported else 0,
+                  snapshot_id, int(imported), facts["priority"], facts["sort_time"])
+        updates = ",".join(f"{col}=excluded.{col}" for col in columns
+                           if col not in ("source", "feed", "item_id", "first_seen"))
+        self._conn.execute(f"INSERT INTO source_catalogue ({','.join(columns)}) VALUES ({','.join('?' for _ in values)}) "
+                           f"ON CONFLICT(source,feed,item_id) DO UPDATE SET {updates},missing_since=NULL", values)
+
+    def _catalogue_snapshot(self, source, rows, successful_feeds, stamp):
+        for feed in successful_feeds:
+            self._conn.execute("UPDATE source_catalogue SET present=0, missing_since=COALESCE(missing_since,?), "
+                               "missing_polls=missing_polls+1,imported=0,snapshot_id=? WHERE source=? AND feed=?",
+                               (stamp, stamp, source, feed))
+            for row in rows:
+                facts = catalogue.adapt(source, row)
+                if facts["feed"] == feed:
+                    self._catalogue_upsert(source, row, snapshot_id=stamp)
+            self._conn.execute("INSERT INTO source_snapshots VALUES (?,?,?) ON CONFLICT(source,feed) "
+                               "DO UPDATE SET last_success=excluded.last_success", (source, feed, stamp))
+
+    def _upgrade_catalogue(self):
+        """Import only saved evidence once; never fabricate older BOM snapshots."""
+        with self._lock, self._conn:
+            if self._conn.execute("SELECT 1 FROM history_migrations WHERE name='source_catalogue_v1'").fetchone():
+                return
+            for source, table in (("bom", "bom_current"), ("rfs", "rfs_incidents"), ("traffic", "traffic_items")):
+                for row in self._conn.execute(f"SELECT * FROM {table}").fetchall():
+                    # Legacy disappearance counts establish absence, but zero
+                    # alone cannot prove membership in a complete snapshot.
+                    present = 0 if dict(row).get("missing_polls", 0) else None
+                    self._catalogue_upsert(source, row, present=present, imported=True)
+            self._conn.execute("INSERT INTO history_migrations(name) VALUES ('source_catalogue_v1')")
+
+    def current_listing(self, source: str, page: int, page_size: int = 50, *, view="current", now=None):
+        """One lifecycle function drives filtering, counts and displayed state."""
+        if source not in ("bom", "rfs", "traffic") or view not in catalogue.VIEWS:
+            raise ValueError("Unknown source or view")
+        now = datetime.now(timezone.utc).timestamp() if now is None else now
+        state = "notice_lifecycle(present,cancelled,ended,starts_at,expires_at,?)"
         page_size = min(200, max(1, page_size))
         with self._lock:
-            total = self._conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}").fetchone()[0]
+            grouped = self._conn.execute(f"SELECT {state} AS state,COUNT(*) AS n FROM source_catalogue "
+                                         "WHERE source=? GROUP BY state", (now, source)).fetchall()
+            states = {row["state"]: row["n"] for row in grouped}
+            counts = {"current": states.get("current", 0), "upcoming": states.get("upcoming", 0),
+                      "past": sum(states.get(key, 0) for key in catalogue.PAST), "all": sum(states.values())}
+            where = "1=1" if view == "all" else ("state IN ('cancelled','ended','expired','absent')" if view == "past" else "state=?")
+            args = (now, source) + (() if view in ("all", "past") else (view,))
+            total = counts[view]
             pages = max(1, (total + page_size - 1) // page_size)
             page = min(pages, max(1, page))
-            rows = self._conn.execute(
-                f"SELECT * FROM {table} WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
-                (page_size, (page - 1) * page_size),
-            ).fetchall()
-        return rows, {"page": page, "pages": pages, "total": total,
-                      "first": (page-1)*page_size+1 if total else 0,
-                      "last": min(page*page_size, total)}
+            rows = self._conn.execute(f"SELECT *,{state} AS state FROM source_catalogue WHERE source=? AND {where} "
+                                     "ORDER BY priority,sort_time DESC,item_id,feed LIMIT ? OFFSET ?",
+                                     args + (page_size, (page-1)*page_size)).fetchall()
+            snapshots = [dict(row) for row in self._conn.execute(
+                "SELECT feed,last_success FROM source_snapshots WHERE source=? ORDER BY feed", (source,))]
+        result = []
+        for row in rows:
+            data = json.loads(row["payload"])
+            data.update(lifecycle=row["state"], lifecycle_label=catalogue.LABELS[row["state"]],
+                        catalogue_feed=row["feed"], catalogue_last_seen=row["last_seen"],
+                        catalogue_imported=bool(row["imported"]), missing_polls=row["missing_polls"],
+                        missing_since=row["missing_since"])
+            result.append(data)
+        return result, {"page": page, "pages": pages, "total": total, "view": view,
+                        "view_label": catalogue.VIEWS[view], "counts": counts, "now": now,
+                        "snapshots": snapshots, "first": (page-1)*page_size+1 if total else 0,
+                        "last": min(page*page_size, total)}
 
     # ---- NSW RFS incidents and history ------------------------------------
     def rfs_get_incident(self, incident_id: str):
@@ -936,7 +1005,7 @@ class Database:
                 "SELECT * FROM rfs_incidents WHERE incident_id = ?", (incident_id,)
             ).fetchone()
 
-    def rfs_save_incident(self, incident, revision_hash: str) -> None:
+    def rfs_save_incident(self, incident, revision_hash: str, *, catalogue_observation=True) -> None:
         selection = notice_evaluate("rfs", notice_values("rfs", incident), self.all_settings()).metadata()
         with self._lock:
             self._conn.execute(
@@ -956,6 +1025,9 @@ class Database:
             )
             self._conn.execute("UPDATE rfs_incidents SET normalized_data=? WHERE incident_id=?",
                                (json.dumps(asdict(incident) | {"notice_selection": selection}), incident.incident_id))
+            if catalogue_observation:
+                row = self._conn.execute("SELECT * FROM rfs_incidents WHERE incident_id=?", (incident.incident_id,)).fetchone()
+                self._catalogue_upsert("rfs", row, present=1)
             self._conn.commit()
 
     def rfs_mark_sent(self, incident_id: str, revision_hash: str) -> None:
@@ -1006,7 +1078,7 @@ class Database:
 
     def rfs_missing_after_poll(self, seen_ids: set[str]) -> list[dict]:
         """Advance disappearance counters only after a successful feed fetch."""
-        with self._lock:
+        with self._lock, self._conn:
             rows = self._conn.execute("SELECT * FROM rfs_incidents").fetchall()
             missing = [row for row in rows if row["incident_id"] not in seen_ids]
             for row in missing:
@@ -1014,6 +1086,7 @@ class Database:
                     "UPDATE rfs_incidents SET missing_polls = missing_polls + 1 WHERE incident_id = ?",
                     (row["incident_id"],),
                 )
+            self._catalogue_snapshot("rfs", [row for row in rows if row["incident_id"] in seen_ids], {"incidents"}, _now())
             self._conn.commit()
             return [dict(row) | {"missing_polls": row["missing_polls"] + 1} for row in missing]
 

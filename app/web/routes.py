@@ -15,7 +15,8 @@ from .. import __version__
 from ..config import MAX_PAYLOAD_BYTES, MIN_POLL_MINUTES, polling_seconds, safety_warning_text as valid_warning_text
 from ..rfs.councils import COUNCILS
 from ..meshcore_discovery import list_usb_serial_devices
-from ..presentation import freshness
+from ..presentation import freshness, listing_status
+from ..catalogue import View
 
 
 def _template_dir() -> Path:
@@ -542,11 +543,11 @@ async def settings_page(request: Request):
 
 
 @router.get("/bom", response_class=HTMLResponse)
-async def bom_page(request: Request, page: int = Query(1, ge=1)):
+async def bom_page(request: Request, page: int = Query(1, ge=1), view: View = Query("current")):
     db = _db(request)
     regions = ["NSW"]
     poll_status = _poller(request).status
-    rows, pagination = db.current_listing("bom", page)
+    rows, pagination = db.current_listing("bom", page, view=view)
     snapshots = {row["region"]: row["fetched_at"] for row in db.bom_snapshot_regions(regions)}
     area_labels = {"aac:lga": "Council", "lga": "Council", "abs:lga": "Council",
                    "aac:district": "Forecast district", "aac:coast": "Marine coast",
@@ -563,18 +564,15 @@ async def bom_page(request: Request, page: int = Query(1, ge=1)):
                                   for area in item["provider_areas"]]
         items.append(item)
     from .geography_routes import saved_decisions
-    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, db.all_settings(), ("bom",)) if x["source"] == "bom"}
+    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, db.all_settings(), ("bom",), listing_rows={"bom": rows}) if x["source"] == "bom"}
     for item in items:
         item["coverage"] = decisions.get(item["alert_id"])
         from ..notice_selection import current_evidence
-        try:
-            expiry = datetime.datetime.fromisoformat(item.get("expires") or "")
-            active = not (expiry.tzinfo and expiry <= datetime.datetime.now(datetime.timezone.utc))
-        except ValueError:
-            active = True
+        active = item["lifecycle"] == "current"
         item["notice"] = current_evidence("bom", {"type": item["event"]}, db.all_settings(), item["coverage"], active)
     return render(
         request, "bom.html", items=items, pagination=pagination,
+        source_listing=listing_status(db, "bom", pagination, db.all_settings(), poll_status.last_poll_time, poll_status.last_poll_result),
         snapshot_freshness=freshness(snapshots.get("NSW", ""), db.get_setting("bom_poll_minutes", 5),
                                      db.get_setting("bom_enabled", True)),
         snapshots=snapshots,

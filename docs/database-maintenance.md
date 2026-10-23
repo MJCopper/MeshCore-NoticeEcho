@@ -34,7 +34,7 @@ Copy verified snapshots to separate storage to protect against loss of the devic
 For the standard Docker Compose configuration, a verified live backup can be created with:
 
 ```bash
-docker compose exec -T wx-echo python -m app.maintenance backup --database /data/noticeecho.db
+docker compose exec -T notice-echo python -m app.maintenance backup --database /data/noticeecho.db
 ```
 
 Use the active database path shown on Troubleshoot when your configuration differs. Native installations can run the same module with their installed Python environment.
@@ -48,9 +48,9 @@ Full integrity checks are available on Troubleshoot. Compaction is deliberately 
 For standard Docker Compose:
 
 ```bash
-docker compose stop wx-echo
-docker compose run --rm --no-deps --entrypoint python wx-echo -m app.maintenance compact --database /data/noticeecho.db --confirm-stopped
-docker compose start wx-echo
+docker compose stop notice-echo
+docker compose run --rm --no-deps --entrypoint python notice-echo -m app.maintenance compact --database /data/noticeecho.db --confirm-stopped
+docker compose start notice-echo
 ```
 
 For native installations, stop the service and run:
@@ -62,3 +62,5 @@ python -m app.maintenance compact --database /path/to/noticeecho.db --confirm-st
 The confirmation flag is an operator assertion, not automatic detection of every other process using SQLite. Keep other database users stopped during compaction. Health-check CLI commands are `check` and `deep-check`, with the same `--database` argument. Full check and compaction failures return a nonzero exit code.
 
 See [implementation validation](database-maintenance-audit.md).
+
+The shared source catalogue is included in backups and table counts. Absent catalogue entries become eligible for stale-notice cleanup after two successful missing snapshots and the configured grace period since last observation. Pending deliveries are protected; display filtering never deletes records. See [current items](current-items.md).

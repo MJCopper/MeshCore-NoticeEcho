@@ -10,26 +10,28 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from ..web.routes import render
 from .councils import COUNCILS
 from .feed import LEVELS
-from ..presentation import freshness
+from ..presentation import freshness, listing_status
+from ..catalogue import View
 from ..notice_selection import current_evidence
 
 router = APIRouter()
 
 
 @router.get("/rfs", response_class=HTMLResponse)
-async def rfs_page(request: Request, page: int = Query(1, ge=1)):
+async def rfs_page(request: Request, page: int = Query(1, ge=1), view: View = Query("current")):
     db = request.app.state.db
     s = db.all_settings()
+    rows, pagination = db.current_listing("rfs", page, view=view)
     from ..web.geography_routes import saved_decisions
-    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, s, ("rfs",)) if x["source"] == "rfs"}
+    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, s, ("rfs",), listing_rows={"rfs": rows}) if x["source"] == "rfs"}
     poller = request.app.state.rfs_poller
-    rows, pagination = db.current_listing("rfs", page)
     last_success = db.get_setting("rfs_last_successful_poll", getattr(poller, "last_successful_poll", ""))
     return render(request, "rfs.html", s=s, councils=COUNCILS, levels=LEVELS,
                   selected_councils=set(s.get("rfs_councils", [])),
                   selected_levels=set(s.get("rfs_levels", [])),
-                  incidents=[dict(row) | {"data": json.loads(row["normalized_data"]), "coverage": decisions.get(row["incident_id"]), "notice": current_evidence("rfs", {"level": row["level"], "kind": row["kind"]}, s, decisions.get(row["incident_id"]), row["missing_polls"] < 2)} for row in rows],
+                  incidents=[dict(row) | {"data": json.loads(row["normalized_data"]), "coverage": decisions.get(row["incident_id"]), "notice": current_evidence("rfs", {"level": row["level"], "kind": row["kind"]}, s, decisions.get(row["incident_id"]), row["lifecycle"] == "current")} for row in rows],
                   pagination=pagination, last_success=last_success,
+                  source_listing=listing_status(db, "rfs", pagination, s, poller.last_poll, poller.last_result),
                   snapshot_freshness=freshness(last_success, s.get("rfs_poll_minutes", 5), s.get("rfs_enabled", False)),
                   rfs_status=poller.last_result, rfs_last_poll=poller.last_poll)
 

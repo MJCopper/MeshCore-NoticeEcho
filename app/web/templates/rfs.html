@@ -6,22 +6,25 @@
   <p class="hint">Source: <a href="https://www.rfs.nsw.gov.au/fire-information/fires-near-me">NSW Rural Fire Service Fires Near Me</a>.
   © State of New South Wales (NSW Rural Fire Service). For current information go to <a href="https://www.rfs.nsw.gov.au/">www.rfs.nsw.gov.au</a>.
   This unofficial relay may be delayed or incomplete. Incident locations may be approximate.</p>
-  <p><b>Feed:</b> {{ rfs_status }}{% if rfs_last_poll %} · Last checked {{ rfs_last_poll|localtime(tz) }}{% endif %}</p>
-  <p class="hint">{{ snapshot_freshness }}{% if last_success %} · Last successful fetch {{ last_success|localtime(tz) }}{% endif %}. Provider update strings have no established timezone.</p>
+  {% include "_source_health.html" %}
+  <p class="hint">Provider update strings have no established timezone.</p>
 </div>
 <p><a href="/settings/rfs">RFS settings</a> · <a href="/history?source=rfs">RFS history</a></p>
 <div class="panel" style="margin-top:18px;">
-  <h3>Current RFS incidents</h3>
+  <h3>{{ pagination.view_label }} RFS incidents</h3>
+  {% include "_source_views.html" %}
   {% if incidents %}
   {% include "_current_pagination.html" %}
+  <div class="source-table-scroll" role="region" aria-label="RFS notice details" tabindex="0">
   <table><thead><tr><th>Alert level</th><th>Incident</th><th>Council</th><th>Status</th></tr></thead><tbody>
   {% for i in incidents %}<tr><td>{{ i.level }}</td><td>{% if i.source_url %}<a href="{{ i.source_url }}">{{ i.name }}</a>{% else %}{{ i.name }}{% endif %}<br><span class="hint">{{ i.kind }} · {{ i.location }}</span>
     {% if i.data.size %}<br>Reported size: {{ i.data.size }}{% endif %}{% if i.data.agency %}<br>Agency: {{ i.data.agency }}{% endif %}
     {% if i.updated %}<br><span class="hint">Provider updated: {{ i.updated }} (timezone unverified)</span>{% endif %}
     {% if i.data.published_raw %}<br><span class="hint">Provider publication: {{ i.data.published_raw }} (timezone unverified)</span>{% endif %}
-    <br><span class="hint">Observed {{ i.last_seen|localtime(tz) }}</span></td><td>{{ i.council or 'Unknown' }}<br><span class="hint">Provider council name; incident footprint not established</span>{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with notice = i.notice %}{% include "_notice_evidence.html" %}{% endwith %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td><td>{{ i.status }}</td></tr>{% endfor %}
+    <br><span class="hint">Observed {{ i.last_seen|localtime(tz) }}</span></td><td>{{ i.council or 'Unknown' }}<br><span class="hint">Provider council name; incident footprint not established</span>{% if i.coverage %}<p class="hint">{{ i.coverage.reason }}</p>{% endif %}{% with notice = i.notice %}{% include "_notice_evidence.html" %}{% endwith %}{% with coverage = i.coverage %}{% include "_geographic_evidence.html" %}{% endwith %}</td><td>{{ i.status }}{% with entry = i %}{% include "_source_item_status.html" %}{% endwith %}</td></tr>{% endfor %}
   </tbody></table>
+  </div>
   {% include "_current_pagination.html" %}
-  {% else %}<p class="hint">No current incidents have been loaded. The RFS feed is checked when monitoring is enabled.</p>{% endif %}
+  {% else %}{% include "_source_empty.html" %}{% endif %}
 </div>
 {% endblock %}

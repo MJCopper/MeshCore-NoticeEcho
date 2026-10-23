@@ -16,7 +16,8 @@ DEFAULTS = {"maintenance_enabled": True, "maintenance_history_days": 90,
             "maintenance_error_days": 30, "maintenance_stale_days": 30,
             "maintenance_backup_keep": 7}
 TABLES = ("settings", "service_history", "transmit_log", "errors", "events",
-          "bom_current", "alert_state", "rfs_incidents", "traffic_items", "history", "rfs_history")
+          "bom_current", "alert_state", "rfs_incidents", "traffic_items", "history", "rfs_history",
+          "source_catalogue", "source_snapshots")
 PENDING = "('queued','deferred','failed','interrupted')"
 # Keep identity anchors even after stale current records leave the snapshot.
 PROTECTED = f"""COALESCE(transmit_status,'') IN {PENDING}
@@ -101,6 +102,11 @@ def clean(db, settings):
     cutoff = lambda days: (now-timedelta(days=days)).isoformat(timespec="seconds")
     stale = cutoff(settings["maintenance_stale_days"])
     queries = {
+        "source_catalogue": (f"present=0 AND missing_polls>=2 AND last_seen<? AND NOT EXISTS "
+                             f"(SELECT 1 FROM service_history h WHERE h.source=source_catalogue.source "
+                             f"AND (h.external_id=source_catalogue.item_id OR (h.source='traffic' AND "
+                             f"substr(h.external_id,instr(h.external_id,':')+1)=substr(source_catalogue.item_id,instr(source_catalogue.item_id,':')+1))) "
+                             f"AND h.transmit_status IN {PENDING})", (stale,)),
         "rfs_incidents": (f"missing_polls>=2 AND last_seen<? AND NOT EXISTS (SELECT 1 FROM service_history h WHERE h.source='rfs' AND h.external_id=rfs_incidents.incident_id AND h.transmit_status IN {PENDING})", (stale,)),
         "traffic_items": (f"missing_polls>=2 AND last_seen<? AND NOT EXISTS (SELECT 1 FROM service_history h WHERE h.source='traffic' AND substr(h.external_id,instr(h.external_id,':')+1)=substr(traffic_items.item_id,instr(traffic_items.item_id,':')+1) AND h.transmit_status IN {PENDING})", (stale,)),
         "bom_current": (f"julianday(expires)<julianday(?) AND fetched_at<? AND NOT EXISTS (SELECT 1 FROM service_history h WHERE h.source='bom' AND h.external_id=bom_current.alert_id AND h.transmit_status IN {PENDING})", (stale,stale)),
