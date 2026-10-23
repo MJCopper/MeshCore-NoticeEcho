@@ -347,3 +347,28 @@ async def test_shutdown_during_scheduler_settings_read_does_not_start_work(db):
         shutdown=asyncio.create_task(manager.close());await asyncio.sleep(.01)
         release.set();await shutdown
     assert manager.task is None
+
+
+@pytest.mark.asyncio
+async def test_database_settings_has_own_page_and_troubleshoot_link(environment):
+    from app.web.routes import router as web_router
+    app = environment
+    app.include_router(web_router)
+    app.state.db.set_setting('maintenance_stale_days', 45)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        settings = await client.get('/settings')
+        assert 'href="/settings/database"' in settings.text
+        page = await client.get('/settings/database')
+        assert page.status_code == 200
+        assert '<h2>Database Maintenance</h2>' in page.text
+        assert 'name="maintenance_stale_days"' in page.text
+        assert 'value="45"' in page.text
+        assert 'Save maintenance settings' in page.text
+        assert 'Create verified backup' in page.text
+        assert "async function api(" in page.text
+        troubleshoot = await client.get('/troubleshoot')
+        assert troubleshoot.status_code == 200
+        assert 'href="/settings/database"' in troubleshoot.text
+        assert 'id="database-settings"' not in troubleshoot.text
+        assert 'async function refreshDatabase()' not in troubleshoot.text
+        assert not app.state.tx.sent

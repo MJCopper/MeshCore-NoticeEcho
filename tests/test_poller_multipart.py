@@ -392,11 +392,11 @@ def test_dry_run_verification_appears_once_in_five_minutes():
     assert db.get_setting("verification_dry_run_last_ts")["0"]
 
 
-def test_verification_is_due_again_after_five_minutes():
+def test_verification_is_due_again_after_180_minutes():
     from datetime import datetime, timedelta, timezone
 
     db = _FakeDb()
-    old = (datetime.now(timezone.utc) - timedelta(seconds=301)).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(minutes=180, seconds=1)).isoformat()
     db.set_setting("verification_live_last_ts", {"0": old})
     tx = _FakeTx()
     BomPoller(db, tx)._queue_verification(0, dry_run=False)

@@ -57,13 +57,15 @@ git pull
 docker compose up -d --build
 ```
 
-Settings and history persist in `data/wx-echo.db`. Keep the `data/` directory when moving or reinstalling. To back up the Docker database:
+Existing installations using `wx-echo.db` must follow the [one-time database name migration](docs/database-maintenance.md#one-time-database-name-migration) before starting this version with the updated Compose configuration.
+
+Settings and history persist in `data/noticeecho.db`. Keep the `data/` directory when moving or reinstalling. To back up the Docker database:
 
 ```bash
-docker compose exec -T wx-echo python -m app.maintenance backup --database /data/wx-echo.db
+docker compose exec -T wx-echo python -m app.maintenance backup --database /data/noticeecho.db
 ```
 
-Daily maintenance and verified backups are configurable on Troubleshoot. See [database maintenance](docs/database-maintenance.md) for retention, restore and offline compaction.
+Daily maintenance and verified backups are configurable under Settings → Database Maintenance. See [database maintenance](docs/database-maintenance.md) for retention, restore and offline compaction.
 
 For native Linux, rerun the installer to update. Its database is in the installation's `data/` directory; the active path is shown on Troubleshoot.
 

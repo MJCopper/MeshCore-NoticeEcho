@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import Database
+from app.web.routes import router as shared_router
 from app.traffic.feed import TrafficItem, council_at, council_at_prepared, prepare_councils, parse_feed
 from app.traffic.poller import TrafficPoller
 from app.traffic.web import router
@@ -144,6 +145,7 @@ async def test_dry_run_records_message_without_radio():
 def test_traffic_settings_page_and_save():
     db = Database(":memory:")
     app = FastAPI()
+    app.include_router(shared_router)
     app.include_router(router)
     app.state.db = db
     app.state.tx = Tx()

@@ -312,7 +312,7 @@ def diagnostics(app):
         if source=='bom' and not success:
             snapshots=rows(db,"SELECT fetched_at FROM bom_feed_snapshots WHERE region='NSW'")
             success=snapshots[0]['fetched_at'] if snapshots else ''
-        interval=polling_seconds(settings.get(source+'_poll_minutes',5 if source=='bom' else 10),5 if source=='bom' else 10)
+        interval=polling_seconds(settings.get(source+'_poll_minutes',5),5)
         enabled=settings.get(source+'_enabled',source=='bom')
         next_poll='Disabled' if not enabled else 'Due now / on startup'
         if attempt and enabled:

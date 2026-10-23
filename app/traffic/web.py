@@ -32,7 +32,7 @@ async def traffic_page(request: Request, page: int = Query(1, ge=1)):
         item["coverage"] = decisions.get(item["item_id"])
         data = item["data"]
         item["schedule"] = [ClosurePeriod(**p).describe() for p in data.get("periods", [])]
-        item["freshness"] = freshness(item["last_seen"], s.get("traffic_poll_minutes", 10), s.get("traffic_enabled", False))
+        item["freshness"] = freshness(item["last_seen"], s.get("traffic_poll_minutes", 5), s.get("traffic_enabled", False))
         item["current_now"] = bool(item["active"] and not data.get("ended") and
                                     (data.get("start") is None or data["start"] <= time.time()) and
                                     (data.get("end") is None or data["end"] > time.time()))
@@ -59,7 +59,7 @@ async def traffic_settings_page(request: Request):
 @router.post("/settings/traffic")
 async def save_traffic_settings(request: Request,
                                 traffic_enabled: str = Form(""),
-                                traffic_poll_minutes: int = Form(10),
+                                traffic_poll_minutes: int = Form(5),
                                 traffic_all_councils: str = Form(""),
                                 traffic_councils: list[str] = Form(default=[]),
                                 traffic_types: list[str] = Form(default=[])):

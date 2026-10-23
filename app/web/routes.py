@@ -8,11 +8,11 @@ from pathlib import Path
 import datetime
 
 from fastapi import APIRouter, Form, Request, Query, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__
-from ..config import MAX_PAYLOAD_BYTES, MIN_POLL_MINUTES, polling_seconds
+from ..config import MAX_PAYLOAD_BYTES, MIN_POLL_MINUTES, polling_seconds, safety_warning_text as valid_warning_text
 from ..rfs.councils import COUNCILS
 from ..meshcore_discovery import list_usb_serial_devices
 from ..presentation import freshness
@@ -28,6 +28,22 @@ def _template_dir() -> Path:
 
 router = APIRouter()
 TEMPLATES = Jinja2Templates(directory=str(_template_dir()))
+
+
+@router.get("/static/noticeecho-logo.png", include_in_schema=False)
+async def brand_logo():
+    return FileResponse(_template_dir().parent / "static" / "noticeecho-logo.png", media_type="image/png")
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+@router.get("/static/favicon.ico", include_in_schema=False)
+async def favicon_ico():
+    return FileResponse(_template_dir().parent / "static" / "favicon.ico", media_type="image/x-icon")
+
+
+@router.get("/static/favicon.png", include_in_schema=False)
+async def favicon_png():
+    return FileResponse(_template_dir().parent / "static" / "favicon.png", media_type="image/png")
 
 from ..formatter import fmt_local, fmt_epoch
 from ..history import history_sources, get_history_source, history_source_label
@@ -77,6 +93,9 @@ TX_STATUS_LABELS = {
 
 
 def render(request: Request, name: str, **ctx):
+    appearance = request.app.state.db.get_setting("appearance", "dark")
+    if appearance not in ("light", "dark"):
+        appearance = "dark"
     try:
         tz = request.app.state.db.get_setting("display_timezone", "")
     except Exception:
@@ -84,7 +103,7 @@ def render(request: Request, name: str, **ctx):
     return TEMPLATES.TemplateResponse(
         request, name,
         {"max_bytes": getattr(_tx(request), "message_budget", MAX_PAYLOAD_BYTES), "tz": tz, "disp_label": DISP_LABELS,
-         "tx_label": TX_STATUS_LABELS, "version": __version__,
+         "tx_label": TX_STATUS_LABELS, "version": __version__, "appearance": appearance,
          "geographic_policy": request.app.state.db.get_setting("geographic_policy", None), **ctx},
     )
 
@@ -452,21 +471,41 @@ async def settings_home(request: Request):
     return render(request, "settings_home.html")
 
 
+@router.get("/settings/database", response_class=HTMLResponse)
+async def database_settings_page(request: Request):
+    return render(request, "settings_database.html", s=_db(request).all_settings())
+
+
 @router.get("/settings/general", response_class=HTMLResponse)
 async def general_settings_page(request: Request):
     db = _db(request)
     tz = db.get_setting("display_timezone", "Australia/Sydney")
     return render(request, "settings_general.html", timezones=_TIMEZONES,
                   tz_current=tz, dry_run=bool(db.get_setting("dry_run", True)),
-                  safety_warning_interval_minutes=db.get_setting("safety_warning_interval_minutes", 5))
+                  safety_warning_text=valid_warning_text(db.get_setting("safety_warning_text")),
+                  safety_warning_max_bytes=MAX_PAYLOAD_BYTES,
+                  safety_warning_interval_minutes=db.get_setting("safety_warning_interval_minutes", 180))
 
 
 @router.post("/settings/general")
 async def save_general_settings(request: Request,
                                 display_timezone: str = Form("Australia/Sydney"),
+                                appearance: str | None = Form(None),
                                 dry_run: str = Form(""),
+                                safety_warning_text: str | None = Form(None),
                                 safety_warning_interval_minutes: int | None = Form(None, ge=1, le=1440)):
     db = _db(request)
+    warning_submitted = "safety_warning_text" in await request.form()
+    if warning_submitted:
+        safety_warning_text = (safety_warning_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not safety_warning_text or len(safety_warning_text.encode("utf-8")) > MAX_PAYLOAD_BYTES:
+            raise HTTPException(status_code=422, detail=f"Safety warning must contain 1–{MAX_PAYLOAD_BYTES} UTF-8 bytes")
+    if appearance is not None:
+        if appearance not in ("light", "dark"):
+            raise HTTPException(status_code=422, detail="Appearance must be light or dark")
+        db.set_setting("appearance", appearance)
+    if warning_submitted:
+        db.set_setting("safety_warning_text", safety_warning_text)
     allowed = {value for value, _ in _TIMEZONES}
     db.set_setting("display_timezone", display_timezone if display_timezone in allowed else "Australia/Sydney")
     db.set_setting("dry_run", bool(dry_run))

@@ -8,7 +8,7 @@ import time
 import logging
 from datetime import datetime, timedelta, timezone
 
-from ..config import FINAL_VERIFICATION_MESSAGE, MAX_PAYLOAD_BYTES, verification_interval_seconds, polling_seconds
+from ..config import safety_warning_text, MAX_PAYLOAD_BYTES, verification_interval_seconds, polling_seconds
 from ..brief import brief_parts, NoticeTooLong, transmission_label, transmission_topic, same_classification, without_classification_prefix
 from ..delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
 from .feed import RFSClient, RFSFeedError, council_key
@@ -87,7 +87,7 @@ class RFSPoller:
                 continue
             self.event.clear()
             try:
-                interval = polling_seconds(self.db.get_setting("rfs_poll_minutes", 10), 10)
+                interval = polling_seconds(self.db.get_setting("rfs_poll_minutes", 5), 5)
                 self.next_poll_at = datetime.fromtimestamp(time.time() + interval, timezone.utc).isoformat()
                 await asyncio.wait_for(self.event.wait(), interval)
             except asyncio.TimeoutError:
@@ -245,9 +245,10 @@ class RFSPoller:
             self.db.set_setting("rfs_last_successful_poll", self.last_poll)
 
     def _queue_verification(self, dry_run: bool):
+        message = safety_warning_text(self.db.get_setting("safety_warning_text"))
         budget = getattr(self.tx, "message_budget", MAX_PAYLOAD_BYTES)
-        if len(FINAL_VERIFICATION_MESSAGE.encode()) > budget:
-            signature = (len(FINAL_VERIFICATION_MESSAGE.encode()), budget)
+        if len(message.encode()) > budget:
+            signature = (len(message.encode()), budget)
             if getattr(self, "_verification_budget_error", None) != signature:
                 self._verification_budget_error = signature
                 self.db.add_error("rfs", f"verification message exceeds MeshCore limit ({budget} bytes)")
@@ -255,7 +256,7 @@ class RFSPoller:
         self._verification_budget_error = None
         if dry_run:
             return
-        interval = verification_interval_seconds(self.db.get_setting("safety_warning_interval_minutes", 5))
+        interval = verification_interval_seconds(self.db.get_setting("safety_warning_interval_minutes", 180))
         key = "verification_live_last_ts"
         saved = self.db.get_setting(key, {}) or {}
         channel = str(self.db.get_setting("meshcore_channel", 0))
@@ -272,5 +273,5 @@ class RFSPoller:
             else:
                 self.db.add_error("rfs", f"verification message failed: {error}")
 
-        self.tx.enqueue_verification(FINAL_VERIFICATION_MESSAGE, on_result=on_result,
+        self.tx.enqueue_verification(message, on_result=on_result,
                                      allow_new=elapsed >= interval)

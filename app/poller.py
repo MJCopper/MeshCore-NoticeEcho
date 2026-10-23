@@ -18,7 +18,7 @@ from .bom_area import match_councils
 from .bom_geography import cancellation_only
 from .geography import bom_coverage as match_geography, active as geographic_active, KEY as GEOGRAPHIC_KEY
 from .config import (
-    FINAL_VERIFICATION_MESSAGE,
+    safety_warning_text,
     MAX_PAYLOAD_BYTES,
     polling_seconds,
     POLL_HARD_TIMEOUT,
@@ -466,10 +466,11 @@ class BomPoller:
         return True
 
     def _queue_verification(self, channel: int, dry_run: bool) -> None:
+        message = safety_warning_text(self._db.get_setting("safety_warning_text"))
         budget = getattr(self._tx, "message_budget", MAX_PAYLOAD_BYTES)
-        length = len(FINAL_VERIFICATION_MESSAGE.encode("utf-8"))
+        length = len(message.encode("utf-8"))
         if length > budget:
-            signature = (len(FINAL_VERIFICATION_MESSAGE.encode()), budget)
+            signature = (len(message.encode()), budget)
             if getattr(self, "_verification_budget_error", None) != signature:
                 self._verification_budget_error = signature
                 detail = f"verification message exceeds MeshCore limit ({length} > {budget} bytes)"
@@ -477,7 +478,7 @@ class BomPoller:
                 self._db.add_event("WARN", detail)
             return
         self._verification_budget_error = None
-        interval = verification_interval_seconds(self._db.get_setting("safety_warning_interval_minutes", 5))
+        interval = verification_interval_seconds(self._db.get_setting("safety_warning_interval_minutes", 180))
         key = "verification_dry_run_last_ts" if dry_run else "verification_live_last_ts"
         timestamps = self._db.get_setting(key, {}) or {}
         last = timestamps.get(str(channel), "")
@@ -488,7 +489,7 @@ class BomPoller:
         due = elapsed >= interval
         if dry_run:
             if due:
-                self._db.add_event("INFO", f"[DRY-RUN] would send: {FINAL_VERIFICATION_MESSAGE}")
+                self._db.add_event("INFO", f"[DRY-RUN] would send: {message}")
                 timestamps[str(channel)] = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 self._db.set_setting(key, timestamps)
             return
@@ -503,7 +504,7 @@ class BomPoller:
                 self._db.add_error("broadcast", f"verification message failed: {err}")
                 self._db.add_event("WARN", f"verification message failed: {err}")
 
-        self._tx.enqueue_verification(FINAL_VERIFICATION_MESSAGE, on_result=on_result,
+        self._tx.enqueue_verification(message, on_result=on_result,
                                       allow_new=due)
 
     def _record_state(self, alert: Alert, decision) -> None:

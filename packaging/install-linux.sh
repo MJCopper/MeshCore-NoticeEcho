@@ -93,7 +93,8 @@ SERVICE=notice-echo
 # Keep the existing unit name on upgrade so automation and journal commands survive.
 if [ -f /etc/systemd/system/wx-echo.service ]; then SERVICE=wx-echo;
 elif [ -f /etc/systemd/system/mesh-wx.service ]; then SERVICE=mesh-wx; fi
-DB_NAME=notice-echo.db
+DB_NAME=noticeecho.db
+if [ ! -f "$DIR/data/$DB_NAME" ] && [ -f "$DIR/data/notice-echo.db" ]; then DB_NAME=notice-echo.db; fi
 if [ ! -f "$DIR/data/$DB_NAME" ] && [ -f "$DIR/data/wx-echo.db" ]; then DB_NAME=wx-echo.db; fi
 if [ ! -f "$DIR/data/$DB_NAME" ] && [ -f "$DIR/data/mesh-wx.db" ]; then DB_NAME=mesh-wx.db; fi
 sed -e "s#__USER__#$SVC_USER#g" -e "s#__DIR__#$DIR#g" -e "s#__DB__#$DB_NAME#g" \

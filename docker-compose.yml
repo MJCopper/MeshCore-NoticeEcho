@@ -11,7 +11,7 @@ services:
       - "8110:8000"
     environment:
       NOTICE_ECHO_PORT: "8000"
-      NOTICE_ECHO_DB: "/data/wx-echo.db"
+      NOTICE_ECHO_DB: "/data/noticeecho.db"
     volumes:
       # SQLite lives here (settings, history, transmit log, dedupe state).
       - ./data:/data

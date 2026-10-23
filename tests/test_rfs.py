@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import Database
+from app.web.routes import router as shared_router
 from app.rfs.feed import Incident, council_key, parse_incidents
 from app.rfs.poller import RFSPoller, format_incident
 from app.rfs.web import router
@@ -102,6 +103,7 @@ async def test_rfs_dry_run_previews_without_radio_send():
 def test_rfs_page_offers_all_councils_and_saves_selection():
     db = Database(":memory:")
     app = FastAPI()
+    app.include_router(shared_router)
     app.include_router(router)
     app.state.db = db
     app.state.tx = FakeTx()
@@ -117,7 +119,7 @@ def test_rfs_page_offers_all_councils_and_saves_selection():
     assert response.status_code == 303
     assert db.get_setting("rfs_councils") == []
     assert db.get_setting("rfs_levels") == ["Watch and Act"]
-    assert db.get_setting("rfs_poll_minutes") == 10
+    assert db.get_setting("rfs_poll_minutes") == 5
     client.post("/settings/rfs", data={"rfs_poll_minutes": "2"}, follow_redirects=False)
     assert db.get_setting("rfs_poll_minutes") == 5
     db.set_setting("rfs_councils", ["Central Coast"])

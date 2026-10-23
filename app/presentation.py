@@ -30,5 +30,5 @@ def traffic_feed_status(settings, name, last_success):
     elif not last_success:
         label = "Awaiting first poll"
     else:
-        label = freshness(last_success, settings.get("traffic_poll_minutes", 10))
+        label = freshness(last_success, settings.get("traffic_poll_minutes", 5))
     return requested, label

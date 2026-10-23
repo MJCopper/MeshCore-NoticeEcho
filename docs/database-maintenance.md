@@ -2,7 +2,7 @@
 
 NoticeEcho runs daily maintenance independently of BOM, RFS and Traffic polling. The first run is due on startup if no completed schedule is recorded, then every 24 hours after completion. Failures retry after one hour. Disabling scheduled maintenance does not disable explicit operator actions.
 
-On **Troubleshoot → Database maintenance**, configure retention, inspect storage and table counts, run maintenance, create a backup, or run quick/full integrity checks. Actions run in a worker thread with one action at a time; shutdown waits for active work before closing SQLite. No action fetches feeds, reprocesses notices or transmits messages.
+On **Settings → Database Maintenance**, configure retention, inspect storage and table counts, run maintenance, create a backup, or run quick/full integrity checks. Actions run in a worker thread with one action at a time; shutdown waits for active work before closing SQLite. No action fetches feeds, reprocesses notices or transmits messages.
 
 | Setting | Default |
 | --- | --- |
@@ -34,7 +34,7 @@ Copy verified snapshots to separate storage to protect against loss of the devic
 For the standard Docker Compose configuration, a verified live backup can be created with:
 
 ```bash
-docker compose exec -T wx-echo python -m app.maintenance backup --database /data/wx-echo.db
+docker compose exec -T wx-echo python -m app.maintenance backup --database /data/noticeecho.db
 ```
 
 Use the active database path shown on Troubleshoot when your configuration differs. Native installations can run the same module with their installed Python environment.
@@ -49,16 +49,41 @@ For standard Docker Compose:
 
 ```bash
 docker compose stop wx-echo
-docker compose run --rm --no-deps --entrypoint python wx-echo -m app.maintenance compact --database /data/wx-echo.db --confirm-stopped
+docker compose run --rm --no-deps --entrypoint python wx-echo -m app.maintenance compact --database /data/noticeecho.db --confirm-stopped
 docker compose start wx-echo
 ```
 
 For native installations, stop the service and run:
 
 ```bash
-python -m app.maintenance compact --database /path/to/notice-echo.db --confirm-stopped
+python -m app.maintenance compact --database /path/to/noticeecho.db --confirm-stopped
 ```
 
 The confirmation flag is an operator assertion, not automatic detection of every other process using SQLite. Keep other database users stopped during compaction. Health-check CLI commands are `check` and `deep-check`, with the same `--database` argument. Full check and compaction failures return a nonzero exit code.
 
 See [implementation validation](database-maintenance-audit.md).
+
+## One-time database name migration
+
+Stop NoticeEcho before migrating. The command creates `noticeecho.db` in the same directory using SQLite's backup API, which includes committed transactions still in the WAL. It runs a full integrity check and copies the existing backup directory to `noticeecho.db.backups/`. It refuses to overwrite an existing database or backup directory.
+
+For the standard Docker installation, run from the repository directory:
+
+```bash
+docker compose stop wx-echo
+docker compose build wx-echo
+docker compose run --rm --no-deps --entrypoint python wx-echo -m app.migrate_database --database /data/wx-echo.db --confirm-stopped
+docker compose up -d wx-echo
+```
+
+Use the actual old filename if it is `notice-echo.db` or `mesh-wx.db`. If using the external test volume, include both Compose files in every command, as for normal operation. No migration is needed for a fresh installation.
+
+For native installations, stop the service or desktop app, then run:
+
+```bash
+python -m app.migrate_database --database /path/to/wx-echo.db --confirm-stopped
+```
+
+The original database, its WAL files, and original backups are retained for rollback; they are no longer the live database. Keep them until the migration is confirmed. The `.noticeecho-db-migration.json` marker redirects an existing legacy database environment path to the migrated file, so older native service configurations continue to work. New configurations should explicitly use `noticeecho.db`. Repeating a completed migration reports `already migrated` without copying over the live database. If the migrated database later disappears, startup using the legacy path fails instead of silently reverting to the old data.
+
+Migration needs enough free disk space for another database copy and another copy of the backups. The command must not run while another process writes to the source database. Do not roll back by simply opening the retained legacy file after new writes; restore a current verified backup using your normal offline restore procedure.

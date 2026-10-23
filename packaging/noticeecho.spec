@@ -8,7 +8,9 @@ ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 
 # Jinja templates must ship as data at the path routes.py expects.
 datas = [(os.path.join(ROOT, "app", "web", "templates"),
-          os.path.join("app", "web", "templates"))]
+          os.path.join("app", "web", "templates")),
+         (os.path.join(ROOT, "app", "web", "static"),
+          os.path.join("app", "web", "static"))]
 binaries = []
 hiddenimports = collect_submodules("app")
 

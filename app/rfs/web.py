@@ -30,7 +30,7 @@ async def rfs_page(request: Request, page: int = Query(1, ge=1)):
                   selected_levels=set(s.get("rfs_levels", [])),
                   incidents=[dict(row) | {"data": json.loads(row["normalized_data"]), "coverage": decisions.get(row["incident_id"]), "notice": current_evidence("rfs", {"level": row["level"], "kind": row["kind"]}, s, decisions.get(row["incident_id"]), row["missing_polls"] < 2)} for row in rows],
                   pagination=pagination, last_success=last_success,
-                  snapshot_freshness=freshness(last_success, s.get("rfs_poll_minutes", 10), s.get("rfs_enabled", False)),
+                  snapshot_freshness=freshness(last_success, s.get("rfs_poll_minutes", 5), s.get("rfs_enabled", False)),
                   rfs_status=poller.last_result, rfs_last_poll=poller.last_poll)
 
 
@@ -43,7 +43,7 @@ async def rfs_settings_page(request: Request):
 @router.post("/settings/rfs")
 async def save_rfs_settings(request: Request,
                             rfs_enabled: str = Form(""),
-                            rfs_poll_minutes: int = Form(10),
+                            rfs_poll_minutes: int = Form(5),
                             rfs_all_councils: str = Form(""),
                             rfs_councils: list[str] = Form(default=[]),
                             rfs_levels: list[str] = Form(default=[])):
@@ -60,7 +60,7 @@ async def save_rfs_settings(request: Request,
 @router.post("/rfs/settings")
 async def save_rfs_settings_legacy(request: Request,
                                    rfs_enabled: str = Form(""),
-                                   rfs_poll_minutes: int = Form(10),
+                                   rfs_poll_minutes: int = Form(5),
                                    rfs_all_councils: str = Form(""),
                                    rfs_councils: list[str] = Form(default=[]),
                                    rfs_levels: list[str] = Form(default=[])):

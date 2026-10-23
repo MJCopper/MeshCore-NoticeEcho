@@ -7,10 +7,10 @@ def test_default_poll_intervals_are_independent_minutes():
     db = Database(":memory:")
     assert db.get_setting("bom_enabled") is True
     assert [db.get_setting(key) for key in
-            ("bom_poll_minutes", "rfs_poll_minutes", "traffic_poll_minutes")] == [5, 10, 10]
+            ("bom_poll_minutes", "rfs_poll_minutes", "traffic_poll_minutes")] == [5, 5, 5]
     db.set_setting("rfs_poll_minutes", 15)
     assert db.get_setting("bom_poll_minutes") == 5
-    assert db.get_setting("traffic_poll_minutes") == 10
+    assert db.get_setting("traffic_poll_minutes") == 5
     db.close()
 
 

@@ -599,7 +599,9 @@ async def test_connection_settings_save_validate_and_render_confirmation_control
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
         page=await client.get('/settings/meshcore')
         assert page.status_code==200
-        assert 'Retry unconfirmed transmissions once' in page.text
+        assert 'Retry once when transmission cannot be verified' in page.text
+        assert 'Advanced verification settings' in page.text
+        assert 'Use heard repeats as additional transmission evidence' in page.text
         before=db.all_settings()
         invalid=await client.post('/settings/meshcore',data={'meshcore_confirmation_seconds':'31'})
         assert invalid.status_code==422

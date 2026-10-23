@@ -43,6 +43,9 @@ def test_oversized_verification_is_reported_without_queueing():
             self.errors = []
             self.events = []
 
+        def get_setting(self, key, default=None):
+            return default
+
         def add_error(self, source, detail):
             self.errors.append((source, detail))
 

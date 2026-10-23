@@ -17,7 +17,8 @@ def clean_environment(monkeypatch):
     for prefix in ('NOTICE_ECHO','WX_ECHO','MESH_WX'):
         for suffix in ('HOST','PORT','DB'):
             monkeypatch.delenv(prefix+'_'+suffix,raising=False)
-    monkeypatch.setattr(config.os.path,'isdir',lambda p: False)
+    original_isdir = config.os.path.isdir
+    monkeypatch.setattr(config.os.path,'isdir',lambda p: False if str(p) == '/data' else original_isdir(p))
 
 
 def test_new_environment_has_priority_over_all_old_aliases(monkeypatch,tmp_path):
@@ -59,7 +60,7 @@ def test_fresh_install_uses_new_directory_and_database(monkeypatch,tmp_path):
     monkeypatch.setattr(config.sys,'platform','linux')
     monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path))
     result=config.load_bootstrap()
-    assert result.db_path==str(tmp_path/'notice-echo'/'notice-echo.db')
+    assert result.db_path==str(tmp_path/'notice-echo'/'noticeecho.db')
 
 
 @pytest.mark.parametrize('database',['wx-echo.db','mesh-wx.db'])

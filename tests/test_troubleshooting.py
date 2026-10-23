@@ -472,7 +472,9 @@ async def test_resend_page_explains_why_dry_run_does_not_transmit(environment):
 @pytest.mark.asyncio
 async def test_selected_fire_feed_is_requested_on_both_pages_with_rfs_enabled(environment):
     from app.traffic.web import router as traffic_router
+    from app.web.routes import router as web_router
     app=environment
+    app.include_router(web_router)
     app.include_router(traffic_router)
     app.state.db.set_setting('rfs_enabled',True)
     app.state.db.set_setting('traffic_enabled',True)

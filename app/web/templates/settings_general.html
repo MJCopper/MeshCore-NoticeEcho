@@ -5,6 +5,12 @@
 <h2>General settings</h2>
 <form method="post" action="/settings/general">
   <div class="panel">
+    <label for="appearance">Appearance</label>
+    <select id="appearance" name="appearance" aria-describedby="appearance-help">
+      <option value="dark" {% if appearance == 'dark' %}selected{% endif %}>Blue Dark (default)</option>
+      <option value="light" {% if appearance == 'light' %}selected{% endif %}>Blue Light</option>
+    </select>
+    <p id="appearance-help" class="hint">Applies to all pages and browsers using this NoticeEcho installation after saving.</p>
     <label>Display timezone</label><select name="display_timezone">
       {% for val, lbl in timezones %}<option value="{{ val }}" {% if val == tz_current %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
     </select>
@@ -15,7 +21,28 @@
     <label for="safety-warning-interval">Safety warning interval (minutes)</label>
     <input id="safety-warning-interval" type="number" name="safety_warning_interval_minutes" min="1" max="1440" step="1" value="{{ safety_warning_interval_minutes }}" required aria-describedby="safety-warning-help">
     <p id="safety-warning-help" class="hint">Minimum time between notice bot safety warnings on each channel. Applies to BOM, NSW RFS and Live Traffic NSW. Warnings follow notice transmissions; they are not sent during idle periods.</p>
+    <label for="safety-warning-text">Safety warning text</label>
+    <textarea id="safety-warning-text" name="safety_warning_text" rows="3" required aria-describedby="safety-warning-text-help safety-warning-count" data-max-bytes="{{ safety_warning_max_bytes }}">{{ safety_warning_text }}</textarea>
+    <p id="safety-warning-text-help" class="hint">One MeshCore message, up to {{ safety_warning_max_bytes }} UTF-8 bytes after reserving space for the sender name. Emoji and some characters use multiple bytes.</p>
+    <p id="safety-warning-count" class="hint" role="status" aria-live="polite"></p>
   </div>
   <button type="submit">Save general settings</button>
 </form>
+<script>
+  (function () {
+    const field = document.getElementById('safety-warning-text');
+    const count = document.getElementById('safety-warning-count');
+    const limit = Number(field.dataset.maxBytes);
+    function update() {
+      const size = new TextEncoder().encode(field.value.trim().replace(/\r\n?/g, '\n')).length;
+      count.textContent = size + ' / ' + limit + ' bytes';
+      const error = !size ? 'Enter a safety warning.' : size > limit ? 'Safety warning exceeds the single-message limit by ' + (size - limit) + ' bytes.' : '';
+      field.setCustomValidity(error);
+      field.setAttribute('aria-invalid', error ? 'true' : 'false');
+      count.style.color = error ? 'var(--bad-text)' : '';
+    }
+    field.addEventListener('input', update);
+    update();
+  })();
+</script>
 {% endblock %}

@@ -443,3 +443,31 @@ def test_bom_monitoring_checkbox_saves_and_defaults_on():
     }, follow_redirects=False)
     assert response.status_code == 303
     assert db.get_setting("bom_enabled") is True
+
+
+def test_appearance_defaults_to_dark_and_is_shared_across_pages():
+    client, db, _ = _client({})
+    page = client.get('/settings/general').text
+    assert 'data-appearance="dark"' in page
+    assert 'value="dark" selected' in page
+    response = client.post('/settings/general', data={'appearance': 'light'}, follow_redirects=False)
+    assert response.status_code == 303
+    assert db.get_setting('appearance') == 'light'
+    for url in ('/settings/general', '/settings', '/manual', '/troubleshoot'):
+        response = client.get(url)
+        assert response.status_code == 200
+        assert 'data-appearance="light"' in response.text
+    assert 'value="light" selected' in client.get('/settings/general').text
+    assert client.post('/settings/general', data={'appearance': 'dark'}, follow_redirects=False).status_code == 303
+    assert 'data-appearance="dark"' in client.get('/settings').text
+
+
+def test_appearance_validation_and_older_forms_preserve_preference():
+    client, db, _ = _client({'appearance': 'light', 'dry_run': True})
+    assert client.post('/settings/general', data={'appearance': 'invalid'}).status_code == 422
+    assert db.get_setting('appearance') == 'light'
+    assert db.get_setting('dry_run') is True
+    assert client.post('/settings/general', data={}, follow_redirects=False).status_code == 303
+    assert db.get_setting('appearance') == 'light'
+    db.set_setting('appearance', 'invalid')
+    assert 'data-appearance="dark"' in client.get('/settings/general').text

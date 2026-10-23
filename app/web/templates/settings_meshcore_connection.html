@@ -35,22 +35,64 @@
   </div>
 
   <div class="panel">
-    <h3>Transmission confirmation and retries</h3>
-    <label><input type="checkbox" name="meshcore_repeat_detection" value="1" {% if s.get('meshcore_repeat_detection', true) %}checked{% endif %}> Use matching heard repeats as confirmation</label>
-    <p class="hint">A matching repeat confirms that another node retransmitted this part. It does not guarantee reception by every intended receiver. No heard repeat does not prove failure.</p>
-    <label>Initial confirmation wait (seconds)</label>
-    <input type="number" name="meshcore_confirmation_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_confirmation_seconds', 5) }}">
-    <label><input type="checkbox" name="meshcore_retry_unconfirmed" value="1" {% if s.get('meshcore_retry_unconfirmed', false) %}checked{% endif %}> Retry unconfirmed transmissions once</label>
-    <p class="hint">Off by default. An unconfirmed part may already have arrived, so retrying can produce a duplicate. Remaining parts continue even when confirmation is unavailable.</p>
-    <label>Delay before optional retry (seconds)</label>
-    <input type="number" name="meshcore_retry_delay_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_retry_delay_seconds', 5) }}">
-    <label>Track late heard repeats for (seconds)</label>
-    <input type="number" name="meshcore_late_repeat_seconds" min="10" max="300" step="1" value="{{ s.get('meshcore_late_repeat_seconds', 60) }}">
-    <p class="hint">Late repeats update history and cancel a pending retry. The policy is saved with each queued notice.</p>
+    <h3>Transmission verification</h3>
+    <p class="hint">NoticeEcho checks for local radio transmission activity and can also recognise your message being repeated by another node. These checks do not confirm delivery to recipients. Missing confirmation does not necessarily mean the message failed.</p>
+    <fieldset class="transmission-group">
+      <legend>Optional retry</legend>
+      <label class="chk" for="retry-unconfirmed"><input id="retry-unconfirmed" type="checkbox" name="meshcore_retry_unconfirmed" value="1" {% if s.get('meshcore_retry_unconfirmed', false) %}checked{% endif %} aria-describedby="retry-unconfirmed-help"> Retry once when transmission cannot be verified</label>
+      <p id="retry-unconfirmed-help" class="hint">Off by default. Allows one extra send of a message part when neither local transmission activity nor a matching heard repeat verifies the first attempt. The message may already have arrived, so retrying can produce a duplicate. Local transmission evidence is enough to prevent this retry, even if no repeat is heard. Remaining parts continue when verification is unavailable.</p>
+      <p class="hint">This option controls retries of uncertain transmissions. Recovery from connection failures and certain rejected sends is handled separately.</p>
+    </fieldset>
+    <fieldset class="transmission-group">
+      <legend>Additional evidence</legend>
+      <label class="chk" for="repeat-detection"><input id="repeat-detection" type="checkbox" name="meshcore_repeat_detection" value="1" {% if s.get('meshcore_repeat_detection', true) %}checked{% endif %} aria-describedby="repeat-detection-help"> Use heard repeats as additional transmission evidence</label>
+      <p id="repeat-detection-help" class="hint">On by default. Recognises another node repeating the exact message packet. A repeat provides stronger evidence than local radio activity, but is not required for verification and does not prove delivery to intended recipients.</p>
+    </fieldset>
+    <details class="adv">
+      <summary>Advanced verification settings</summary>
+      <fieldset class="transmission-group">
+        <legend>Verification timing</legend>
+        <label for="confirmation-wait">Initial verification wait (seconds)</label>
+        <input id="confirmation-wait" type="number" name="meshcore_confirmation_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_confirmation_seconds', 5) }}" aria-describedby="confirmation-wait-help">
+        <p id="confirmation-wait-help" class="hint">Default: 5 seconds per message part, starting after the send command returns. Stops early when local transmission activity or a matching repeat is detected. Command preparation and response time are additional. Applies even when heard-repeat evidence is off.</p>
+        <div class="transmission-dependent">
+          <label for="retry-delay">Additional wait before optional retry (seconds)</label>
+          <input id="retry-delay" type="number" name="meshcore_retry_delay_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_retry_delay_seconds', 5) }}" aria-describedby="retry-delay-help">
+          <p id="retry-delay-help" class="hint">Default: 5 seconds after the initial verification wait. Applies only when the optional retry is on. Local transmission evidence or a matching repeat arriving during this wait cancels the retry.</p>
+        </div>
+        <div class="transmission-dependent">
+          <label for="late-repeat-seconds">Late-repeat observation window (seconds)</label>
+          <input id="late-repeat-seconds" type="number" name="meshcore_late_repeat_seconds" min="10" max="300" step="1" value="{{ s.get('meshcore_late_repeat_seconds', 60) }}" aria-describedby="late-repeat-help">
+          <p id="late-repeat-help" class="hint">Default: 60 seconds. Applies only when heard-repeat evidence is on. Continues observing after initial verification to update history; it does not hold the queue for this duration. Tracking may be extended to cover a pending retry, which a matching repeat can cancel.</p>
+        </div>
+      </fieldset>
+      <p class="hint">Local verification uses the companion’s overall transmitted-packet counter. It indicates radio activity rather than an acknowledgement for this exact message; heard repeats are matched to the exact packet.</p>
+    </details>
+    <p class="hint">Saved settings apply to newly queued notices. Each queued notice keeps its saved verification policy.</p>
   </div>
   <button type="submit">Save MeshCore connection</button>
 </form>
 <script>
+(function () {
+  [['repeat-detection', 'late-repeat-seconds'], ['retry-unconfirmed', 'retry-delay']].forEach(function (ids) {
+    const checkbox = document.getElementById(ids[0]);
+    const input = document.getElementById(ids[1]);
+    // Disabled controls are omitted from forms; retain their saved values.
+    const retained = document.createElement('input');
+    retained.type = 'hidden';
+    retained.name = input.name;
+    input.after(retained);
+    function update() {
+      input.disabled = !checkbox.checked;
+      retained.disabled = checkbox.checked;
+      retained.value = input.value;
+      input.closest('.transmission-dependent').classList.toggle('is-disabled', input.disabled);
+    }
+    checkbox.addEventListener('change', update);
+    input.addEventListener('input', update);
+    update();
+  });
+})();
 (function () {
   const panel = document.getElementById('meshcore-channel-fields');
   const conn = document.querySelector('[name="meshcore_conn"]');

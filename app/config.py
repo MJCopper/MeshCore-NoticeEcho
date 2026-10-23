@@ -6,6 +6,7 @@ Everything else is stored in the database and editable in the UI.
 from __future__ import annotations
 
 import os
+import json
 import sys
 import warnings
 from dataclasses import dataclass
@@ -61,8 +62,22 @@ def load_bootstrap() -> BootstrapConfig:
     db_path = _env_with_legacy("WX_ECHO_DB")
     if not db_path:
         data_dir = default_data_dir()
-        candidates = [data_dir / "notice-echo.db", data_dir / "wx-echo.db", data_dir / LEGACY_DB_NAME]
+        candidates = [data_dir / "noticeecho.db", data_dir / "notice-echo.db", data_dir / "wx-echo.db", data_dir / LEGACY_DB_NAME]
         db_path = str(next((path for path in candidates if path.is_file()), candidates[0]))
+    chosen = Path(db_path).expanduser()
+    migration = chosen.parent / ".noticeecho-db-migration.json"
+    if chosen.name in ("notice-echo.db", "wx-echo.db", LEGACY_DB_NAME) and migration.is_file():
+        recorded = json.loads(migration.read_text())
+        target = chosen.with_name("noticeecho.db")
+        if recorded.get("source") == str(chosen.resolve()) and recorded.get("target") == str(target.resolve()):
+            if not target.is_file():
+                raise RuntimeError("Migrated noticeecho.db is missing; refusing to reopen the stale legacy database")
+            db_path = str(target)
+            chosen = target
+    if chosen.name == "noticeecho.db" and not chosen.exists():
+        legacy = [chosen.with_name(name) for name in ("notice-echo.db", "wx-echo.db", LEGACY_DB_NAME)]
+        if any(path.exists() for path in legacy):
+            raise RuntimeError("Legacy database found. Stop NoticeEcho and run python -m app.migrate_database --database <existing-path> --confirm-stopped before using noticeecho.db")
     # Make sure the parent directory exists so SQLite can create the file.
     parent = Path(db_path).expanduser().parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -81,8 +96,14 @@ BOM_USER_AGENT = (
     "Gecko/20100101 Firefox/140.0"
 )
 
+FINAL_VERIFICATION_MESSAGE = (
+    "UNOFFICIAL relay. May be incorrect or incomplete. Verify independently. "
+    "Never base safety decisions on these notices."
+)
+
 DEFAULT_SETTINGS: dict = {
-    "safety_warning_interval_minutes": 5,
+    "safety_warning_text": FINAL_VERIFICATION_MESSAGE,
+    "safety_warning_interval_minutes": 180,
     "maintenance_enabled": True,
     "maintenance_history_days": 90,
     "maintenance_log_days": 90,
@@ -109,8 +130,8 @@ DEFAULT_SETTINGS: dict = {
     "traffic_types": ["incident", "flood", "regional"],
     "poll_interval": 300,  # legacy seconds; BOM now uses bom_poll_minutes
     "bom_poll_minutes": 5,
-    "rfs_poll_minutes": 10,
-    "traffic_poll_minutes": 10,
+    "rfs_poll_minutes": 5,
+    "traffic_poll_minutes": 5,
     "meshcore_enabled": True,
     "meshcore_conn": "serial",
     "meshcore_port": "",
@@ -146,12 +167,8 @@ MESHCORE_CHANNEL_TEXT_BYTES = 160
 MESHCORE_MAX_NAME_BYTES = 32
 # Safe while the companion is offline; the live budget uses its actual name.
 MAX_PAYLOAD_BYTES = MESHCORE_CHANNEL_TEXT_BYTES - MESHCORE_MAX_NAME_BYTES - 2
-FINAL_VERIFICATION_MESSAGE = (
-    "UNOFFICIAL relay. May be incorrect or incomplete. Verify independently. "
-    "Never base safety decisions on these notices."
-)
 
-VERIFICATION_INTERVAL_SECONDS = 300
+VERIFICATION_INTERVAL_SECONDS = 180 * 60
 
 
 def verification_interval_seconds(minutes) -> int:
@@ -176,3 +193,12 @@ def polling_seconds(value: object, default_minutes: int) -> int:
     except (TypeError, ValueError):
         minutes = default_minutes
     return max(MIN_POLL_MINUTES, minutes) * 60
+
+
+def safety_warning_text(value) -> str:
+    """Fall back to the original warning for invalid persisted text."""
+    if isinstance(value, str):
+        value = value.strip()
+        if value and len(value.encode("utf-8")) <= MAX_PAYLOAD_BYTES:
+            return value
+    return FINAL_VERIFICATION_MESSAGE
