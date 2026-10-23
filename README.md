@@ -57,8 +57,6 @@ git pull
 docker compose up -d --build
 ```
 
-Existing installations using `wx-echo.db` must follow the [one-time database name migration](docs/database-maintenance.md#one-time-database-name-migration) before starting this version with the updated Compose configuration.
-
 Settings and history persist in `data/noticeecho.db`. Keep the `data/` directory when moving or reinstalling. To back up the Docker database:
 
 ```bash

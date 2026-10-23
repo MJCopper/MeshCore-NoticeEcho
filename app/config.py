@@ -6,7 +6,6 @@ Everything else is stored in the database and editable in the UI.
 from __future__ import annotations
 
 import os
-import json
 import sys
 import warnings
 from dataclasses import dataclass
@@ -61,23 +60,15 @@ class BootstrapConfig:
 def load_bootstrap() -> BootstrapConfig:
     db_path = _env_with_legacy("WX_ECHO_DB")
     if not db_path:
-        data_dir = default_data_dir()
-        candidates = [data_dir / "noticeecho.db", data_dir / "notice-echo.db", data_dir / "wx-echo.db", data_dir / LEGACY_DB_NAME]
-        db_path = str(next((path for path in candidates if path.is_file()), candidates[0]))
+        db_path = str(default_data_dir() / "noticeecho.db")
     chosen = Path(db_path).expanduser()
-    migration = chosen.parent / ".noticeecho-db-migration.json"
-    if chosen.name in ("notice-echo.db", "wx-echo.db", LEGACY_DB_NAME) and migration.is_file():
-        recorded = json.loads(migration.read_text())
-        target = chosen.with_name("noticeecho.db")
-        if recorded.get("source") == str(chosen.resolve()) and recorded.get("target") == str(target.resolve()):
-            if not target.is_file():
-                raise RuntimeError("Migrated noticeecho.db is missing; refusing to reopen the stale legacy database")
-            db_path = str(target)
-            chosen = target
-    if chosen.name == "noticeecho.db" and not chosen.exists():
-        legacy = [chosen.with_name(name) for name in ("notice-echo.db", "wx-echo.db", LEGACY_DB_NAME)]
-        if any(path.exists() for path in legacy):
-            raise RuntimeError("Legacy database found. Stop NoticeEcho and run python -m app.migrate_database --database <existing-path> --confirm-stopped before using noticeecho.db")
+    # Older native service files may still specify a previous standard name.
+    # Always use the canonical database, never a retained rollback copy.
+    if chosen.name in ("notice-echo.db", "wx-echo.db", LEGACY_DB_NAME):
+        chosen = chosen.with_name("noticeecho.db")
+        if not chosen.is_file():
+            raise RuntimeError("noticeecho.db is missing; update NOTICE_ECHO_DB to the current database path")
+        db_path = str(chosen)
     # Make sure the parent directory exists so SQLite can create the file.
     parent = Path(db_path).expanduser().parent
     parent.mkdir(parents=True, exist_ok=True)

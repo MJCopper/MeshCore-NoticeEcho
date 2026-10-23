@@ -50,9 +50,9 @@ def test_existing_data_directory_is_reused(monkeypatch,tmp_path,platform,old_nam
     base=tmp_path/'Library'/'Application Support' if platform=='darwin' else tmp_path
     old=base/old_name
     old.mkdir(parents=True)
-    (old/'wx-echo.db').write_text('existing data')
+    (old/'noticeecho.db').write_text('existing data')
     assert config.default_data_dir()==old
-    assert config.load_bootstrap().db_path==str(old/'wx-echo.db')
+    assert config.load_bootstrap().db_path==str(old/'noticeecho.db')
     assert not (base/new_name).exists()
 
 
@@ -63,12 +63,22 @@ def test_fresh_install_uses_new_directory_and_database(monkeypatch,tmp_path):
     assert result.db_path==str(tmp_path/'notice-echo'/'noticeecho.db')
 
 
-@pytest.mark.parametrize('database',['wx-echo.db','mesh-wx.db'])
-def test_existing_database_name_remains_in_use(monkeypatch,tmp_path,database):
-    monkeypatch.setattr(config,'default_data_dir',lambda:tmp_path)
-    (tmp_path/database).write_text('existing')
-    assert config.load_bootstrap().db_path==str(tmp_path/database)
-    assert not (tmp_path/'notice-echo.db').exists()
+@pytest.mark.parametrize('database',['notice-echo.db','wx-echo.db','mesh-wx.db'])
+def test_legacy_configured_names_use_canonical_database(monkeypatch,tmp_path,database):
+    (tmp_path/database).write_text('retained rollback')
+    canonical = tmp_path/'noticeecho.db'
+    canonical.write_text('current data')
+    monkeypatch.setenv('NOTICE_ECHO_DB',str(tmp_path/database))
+    assert config.load_bootstrap().db_path==str(canonical)
+
+
+def test_missing_canonical_database_does_not_reopen_rollback(monkeypatch,tmp_path):
+    old = tmp_path/'wx-echo.db'
+    old.write_text('retained rollback')
+    monkeypatch.setenv('NOTICE_ECHO_DB',str(old))
+    with pytest.raises(RuntimeError,match='noticeecho.db is missing'):
+        config.load_bootstrap()
+    assert not (tmp_path/'noticeecho.db').exists()
 
 
 def test_launcher_preserves_legacy_host_and_port(monkeypatch):
