@@ -545,6 +545,7 @@ async def settings_page(request: Request):
 @router.get("/bom", response_class=HTMLResponse)
 async def bom_page(request: Request, page: int = Query(1, ge=1), view: View = Query("current")):
     db = _db(request)
+    settings = db.all_settings()
     regions = ["NSW"]
     poll_status = _poller(request).status
     rows, pagination = db.current_listing("bom", page, view=view)
@@ -564,15 +565,15 @@ async def bom_page(request: Request, page: int = Query(1, ge=1), view: View = Qu
                                   for area in item["provider_areas"]]
         items.append(item)
     from .geography_routes import saved_decisions
-    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, db.all_settings(), ("bom",), listing_rows={"bom": rows}) if x["source"] == "bom"}
+    decisions = {x["id"]: x["coverage"] for x in saved_decisions(db, settings, ("bom",), listing_rows={"bom": rows}) if x["source"] == "bom"}
     for item in items:
         item["coverage"] = decisions.get(item["alert_id"])
         from ..notice_selection import current_evidence
         active = item["lifecycle"] == "current"
-        item["notice"] = current_evidence("bom", {"type": item["event"]}, db.all_settings(), item["coverage"], active)
+        item["notice"] = current_evidence("bom", {"type": item["event"]}, settings, item["coverage"], active)
     return render(
         request, "bom.html", items=items, pagination=pagination,
-        source_listing=listing_status(db, "bom", pagination, db.all_settings(), poll_status.last_poll_time, poll_status.last_poll_result),
+        source_listing=listing_status(db, "bom", pagination, settings, poll_status.last_poll_time, poll_status.last_poll_result),
         snapshot_freshness=freshness(snapshots.get("NSW", ""), db.get_setting("bom_poll_minutes", 5),
                                      db.get_setting("bom_enabled", True)),
         snapshots=snapshots,

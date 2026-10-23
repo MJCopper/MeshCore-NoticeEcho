@@ -1,5 +1,7 @@
 # Notice classification implementation audit
 
+> Historical audit: behaviour, test totals, data and deployment statements below describe the dated review. See [notice selection](notice-selection.md) for current instructions.
+
 Reviewed 10 October 2026 against a SQLite backup made through a read-only connection. Application source was tested in an isolated development-container copy. The review did not change live settings, current notices, historical decisions or transmit anything.
 
 ## Collected data

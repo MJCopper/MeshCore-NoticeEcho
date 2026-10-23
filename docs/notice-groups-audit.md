@@ -1,5 +1,7 @@
 # Group selection implementation audit
 
+> Historical audit: behaviour, test totals, data and deployment statements below describe the dated review. See [notice selection](notice-selection.md) for current instructions.
+
 Reviewed 10 October 2026. Service pages now expose independent modes for each ordinary classification group. Special remains independently selectable, even when every ordinary group uses All. Stable membership and group definitions are pinned in catalogue snapshots. Catalogue adoption previews report group moves and reclassification; new groups start unselected.
 
 The SQLite data comparison used a backup made through a read-only connection. No live settings, notices, history or radio work were changed by the audit.

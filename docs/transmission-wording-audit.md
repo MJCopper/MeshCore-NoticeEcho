@@ -1,5 +1,7 @@
 # Transmission wording implementation audit
 
+> Historical audit: behaviour, test totals, data and deployment statements below describe the dated review. See [transmission wording](transmission-wording.md) for current instructions.
+
 Reviewed 10 October 2026. All eight implementation-plan steps are complete. The change is presentation-only and requires no database migration or operator setting.
 
 ## Plan checks

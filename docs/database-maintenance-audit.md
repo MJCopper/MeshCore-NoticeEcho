@@ -1,5 +1,7 @@
 # Database maintenance completion audit
 
+> Historical audit: behaviour, test totals, data and deployment statements below describe the dated review. See [database maintenance](database-maintenance.md) for current instructions.
+
 Implemented and reviewed 10 October 2026. All items from the approved maintenance proposal are implemented.
 
 | Requirement | Result |

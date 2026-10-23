@@ -43,7 +43,7 @@ Use the active database path shown on Troubleshoot when your configuration diffe
 
 Daily maintenance performs quick and foreign-key checks, a passive WAL checkpoint and `PRAGMA optimize`. SQLite's automatic WAL checkpoints remain enabled. A busy passive checkpoint is reported and can finish on a subsequent run; it does not force readers or writers to wait.
 
-Full integrity checks are available on Troubleshoot. Compaction is deliberately offline and never scheduled or exposed as a live web action. Use it only when reusable space warrants reclaiming disk space. Stop NoticeEcho first; the command creates a verified backup, checks available disk space, compacts and verifies the result. It requires explicit confirmation that the application is stopped.
+Full integrity checks are available under **Settings → Database Maintenance**. Compaction is deliberately offline and never scheduled or exposed as a live web action. Use it only when reusable space warrants reclaiming disk space. Stop NoticeEcho first; the command creates a verified backup, checks available disk space, compacts and verifies the result. It requires explicit confirmation that the application is stopped.
 
 For standard Docker Compose:
 

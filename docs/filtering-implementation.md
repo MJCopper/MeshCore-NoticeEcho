@@ -1,5 +1,7 @@
 # Filtering implementation — 3 October 2026
 
+> Historical audit: behaviour, test totals, data and deployment statements below describe the dated review. See [source-page lifecycle](current-items.md) and [notice selection](notice-selection.md) for current instructions.
+
 All six follow-up findings from the review are implemented.
 
 | Finding | Implemented behaviour |

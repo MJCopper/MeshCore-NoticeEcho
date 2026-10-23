@@ -10,7 +10,7 @@ The dashboard distinguishes current saved notices from lifetime History totals, 
 
 **Re-process current notices** applies the current matching/filtering policy to stored provider inputs, preserving ordinary duplicate suppression and first-live baseline rules. It does not refresh provider observation age, advance disappearance counters or complete a feed baseline. Legacy rows without provider inputs require a successful poll first.
 
-**Resend eligible current notices** intentionally bypasses completed-delivery suppression and the Traffic first-live baseline for the selected current notices. It preserves source enablement, selection, lifecycle/expiry, fire suppression, dry-run and pre-send guards. Notices already queued are not admitted again. Resending a previously sent notice starts a new complete delivery; ordinary recovery preserves both confirmed and potentially delivered parts.
+**Resend eligible current notices** intentionally bypasses completed-delivery suppression and the Traffic first-live baseline for the selected current notices. It preserves source enablement, selection, lifecycle/expiry, dry-run and pre-send guards. Notices already queued are not admitted again. Resending a previously sent notice starts a new complete delivery; ordinary recovery preserves both confirmed and potentially delivered parts.
 
 Choose one service or all, then preview. The preview lists eligible notices, estimated message parts, exclusions, source content and dry-run/live mode. Re-processing can leave already delivered notices unchanged. Preview runs on an isolated database and cannot send to a radio or modify production dedupe/settings/history. Tokens expire after five minutes, are single-use, and become invalid if settings, saved notices or delivery state changes.
 
@@ -32,11 +32,7 @@ Process output before capture starts, subprocess output and native writes bypass
 
 The diagnostic bundle downloads JSON containing redacted settings, service/radio/queue/database status, recent errors, captured logs and latest job outcome. Known credential fields and common token/password/authorization patterns are redacted.
 
-## Validation
-
-290 tests pass. Automated regression coverage uses temporary databases and mock radios. It covers preview isolation, all sources, selection and expiry, disabled services, dry-run, stale/used preview tokens, duplicate queue prevention, deferral retries, reused history rows, cancellation, restart recovery, independent polling, log filtering/redaction/rotation and page rendering. Test-environment deployment retains its external database volume and saved service settings.
-
-The test image was rebuilt and deployed on 3 October 2026. Health, Troubleshoot, source pages, status/log APIs and both downloads returned HTTP 200. An all-service dry-run resend preview reported two current BOM notices and ten message parts; execution completed with two dry-run outcomes. Disabled RFS/Traffic and saved dry-run settings remained intact. Docker reported running/healthy. The pre-deployment backup is `/data/wx-echo-before-troubleshooting-20261003.db` in the external test volume.
+Automated regression tests use temporary databases and mock radios. They do not establish physical MeshCore delivery; device checks are described below.
 
 ## Docker test database on NFS
 
@@ -47,13 +43,15 @@ docker volume create wxecho-test-data
 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
 ```
 
-This stores test settings and history in the external Docker volume `wxecho-test-data`. Creating the volume again is safe and retains its contents. Use both Compose files for subsequent commands. It does not copy an existing `data/wx-echo.db`; back up and migrate that database before switching if it contains settings or history you need. Compose preserves this external volume, including with `down -v`; removing it explicitly with `docker volume rm` deletes the test database.
+This stores test settings and history in the external Docker volume `wxecho-test-data`. Creating the volume again is safe and retains its contents. Use both Compose files for subsequent commands. It does not copy an existing `data/noticeecho.db`; create a verified backup and restore it into the destination volume with NoticeEcho stopped before switching if it contains settings or history you need. Compose preserves this external volume, including with `down -v`; removing it explicitly with `docker volume rm` deletes the test database.
 
 ## Transmission confirmation
 
 “Local TX counter unavailable” means the statistics check failed; it does not establish that the message was not sent. The queue continues the remaining parts. A matching heard repeat confirms propagation even without readable counters. Inspect **Delivery and radios** for counter support/error, repeat subscription status, tracked packets, policy, pending retries and recent unconfirmed submissions. Expand a Transmit Log or History record for individual part evidence. Repeated capability failures do not create duplicate service error records.
 
-To reduce duplicate reception, leave **Retry unconfirmed transmissions once** off unless the network needs that recovery trade-off. When enabled, a late repeat or recovered local counter cancels the pending retry. No repeat can also mean that a receiver heard the original transmission directly.
+Under **Settings → MeshCore connection → Transmission verification**, leave **Retry once when transmission cannot be verified** off to avoid optional resends of messages that may already have arrived. When enabled, a late repeat or recovered local counter cancels the pending retry. Local transmission evidence alone prevents this retry, even without a heard repeat. No repeat can also mean that a receiver heard the original transmission directly. Connection failures and certain rejected sends have separate bounded recovery.
+
+Heard repeats are enabled as additional evidence by default. **Advanced verification settings** contains the initial verification wait (5 seconds), additional wait before optional retry (5 seconds), and late-repeat observation window (60 seconds). The initial wait starts after the send command returns; preparation and command-response time are additional. Late-repeat tracking updates history without holding the queue for the whole window, and may be extended for a pending retry. Local evidence uses the companion’s overall TX counter; exact heard-repeat matching is more specific. Neither establishes recipient delivery.
 
 ### Physical companion checks
 
@@ -64,4 +62,6 @@ Automated tests simulate SDK responses and exercise the SDK packet parser; they 
 Compare `clock` with server time, introduce an offset with `time <epoch>`, and verify `clock sync` reads back the correction. Repeat with automatic synchronization enabled, then reboot and reconnect the companion through USB/TCP. Confirm a periodic correction and check that a multipart notice completes while a clock operation is due. Test failure recovery and verify diagnostics do not claim success without readback or cause duplicate notice transmissions. Automatic synchronization requires a correct server clock; daylight saving is a display concern. Physical-device validation is separate from automated protocol/scheduler tests.
 
 
-Database maintenance controls show retention, protected history, storage, last/next scheduled run, verified backup paths and integrity checks. Scheduled cleanup is independent of service polling. See [database maintenance](database-maintenance.md).
+## Database maintenance
+
+Manage retention, protected history, storage, scheduled runs, verified backups and integrity checks under **Settings → Database Maintenance**. Scheduled cleanup is independent of service polling. See [database maintenance](database-maintenance.md).

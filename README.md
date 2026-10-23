@@ -6,6 +6,8 @@
 
 # Meshcore NoticeEcho
 
+![MeshCore NoticeEcho logo](app/web/static/noticeecho-logo.png)
+
 A self-hosted web app that collects NSW BOM, RFS and Live Traffic notices and broadcasts selected notices over MeshCore.
 
 ## Install
@@ -48,6 +50,14 @@ The installer creates the environment and a service that starts on boot. Open **
 
 New installations start with monitoring disabled. Traffic records its first live poll as a baseline rather than broadcasting every existing notice. Local transmission confirmation does not establish reception by another node.
 
+## Defaults and source views
+
+All three services default to polling every **5 minutes**. Blue Dark is the default appearance. General settings lets you change the safety warning text (up to **126 UTF-8 bytes**) and interval (default **180 minutes**). Existing saved settings are preserved when defaults change.
+
+Each source page opens on **Current**, with **Upcoming**, **Past** and **All saved** views. Current means present in the last successful feed snapshot and not ended, cancelled, expired or future-dated. A failed fetch retains last-known data with a freshness warning; disappearance does not mean an all-clear. See [current-item handling](docs/current-items.md) and [notice selection](docs/notice-selection.md).
+
+Data sources: [Bureau of Meteorology](https://www.bom.gov.au/weather-and-climate/warnings-and-alerts), [NSW Rural Fire Service](https://www.rfs.nsw.gov.au/fire-information/fires-near-me) (© State of New South Wales, NSW Rural Fire Service), and [Live Traffic NSW](https://www.livetraffic.com/) (© Transport for NSW; [Live Traffic Hazards dataset](https://data.nsw.gov.au/data/dataset/2-live-traffic-hazards)). Check these official sources for current information.
+
 ## Update and backup
 
 For Docker, update and rebuild from the repository directory:
@@ -65,18 +75,11 @@ docker compose exec -T notice-echo python -m app.maintenance backup --database /
 
 Daily maintenance and verified backups are configurable under Settings → Database Maintenance. See [database maintenance](docs/database-maintenance.md) for retention, restore and offline compaction.
 
-For native Linux, rerun the installer to update. Its database is in the installation's `data/` directory; the active path is shown on Troubleshoot.
+For native Linux, rerun the installer to update. It fetches updates and resets tracked files, so commit or back up local code edits first. Its database is in the installation's `data/` directory; the active path is shown on Troubleshoot.
 
 ## Troubleshooting
 
 Open **http://<host>:8110/troubleshoot** for feed health, radio status, logs, and previewed reprocessing or resend actions. See [troubleshooting and recovery](docs/troubleshooting.md), including NFS/test-volume setup.
-
-## More information
-
-- [Services and source attribution](docs/services.md)
-- [Settings, geographic coverage and delivery](docs/operation.md)
-- [Upgrade compatibility](docs/compatibility.md)
-- [Development](docs/development.md)
 
 ## License
 

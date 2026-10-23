@@ -6,11 +6,11 @@ Open the BOM, RFS or Traffic settings page. Notice selection is embedded between
 | --- | --- | --- |
 | BOM | Notice type/family | Geographic coverage, enabled service, expiry and delivery state |
 | NSW RFS | Alert level AND incident type | Geographic coverage, enabled service and delivery state |
-| Live Traffic NSW | Feed AND category | Geographic coverage, enabled service, active lifecycle and delivery state |
+| Live Traffic NSW | Category, plus legacy feed restrictions until category-only adoption | Geographic coverage, enabled service, active lifecycle and delivery state |
 
 Each ordinary classification **group** has its own **All in this group / Selected** control. All includes every recognized classification assigned to that group in the active saved catalogue. Only that group's checkboxes are disabled and greyed out. Checked choices survive mode changes, preview, saving and reload, including without JavaScript. Counts and provider examples remain readable.
 
-**Special always remains editable**, separately within every dimension. Unrecognized and Not supplied are included only when their respective checkboxes are checked, regardless of All choices in ordinary groups. Unrecognized means a nonempty provider value outside the saved catalogue; Not supplied means blank or missing. A recognized value with invalid membership fails selection and produces a diagnostic; it does not become Special. Internal invalid Traffic feed identifiers remain diagnostics. Regional roadworks still require the Roadwork feed option.
+**Special always remains editable**, separately within every dimension. Unrecognized and Not supplied are included only when their respective checkboxes are checked, regardless of All choices in ordinary groups. Unrecognized means a nonempty provider value outside the saved catalogue; Not supplied means blank or missing. A recognized value with invalid membership fails selection and produces a diagnostic; it does not become Special. Internal invalid Traffic feed identifiers remain diagnostics. Regional roadworks require the Roadwork feed option while legacy feed restrictions are active.
 
 | Service dimension | Ordinary groups |
 | --- | --- |
@@ -42,7 +42,7 @@ Normal polls, replay/resend, queue guards and settings previews use the shared e
 
 ## Diagnostics
 
-The settings inventory distinguishes current saved records from observed distinct provider IDs, shows catalogue-only entries, and lists raw variants. Historical revisions of the same ID do not inflate an entry's observed count; an ID that changes classification can appear in multiple entries. Current counts represent records still present in saved feed snapshots, not a guarantee of a currently occurring hazard. Traffic IDs include their feed prefix.
+The settings inventory distinguishes current saved records from observed distinct provider IDs, shows catalogue-only entries, and lists raw variants. Historical revisions of the same ID do not inflate an entry's observed count; an ID that changes classification can appear in multiple entries. The inventory’s Current count uses saved BOM snapshot records and RFS/Traffic records that have not been absent for two successful polls; it can include future or ended notices. It is distinct from the lifecycle-filtered Current tab on source pages. See [current-item views](current-items.md) for that shared lifecycle definition. Neither count guarantees a currently occurring hazard. Traffic IDs include their feed prefix.
 
 Troubleshooting links to all three inventories and exposes `/troubleshoot/notice-selection` as read-only JSON. History shows recorded selection evidence; current service pages show eligibility under current settings independently from Geographic Coverage. Use Poll now for new provider data, then preview before an explicit resend.
 

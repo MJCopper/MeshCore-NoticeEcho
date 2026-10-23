@@ -1,8 +1,10 @@
 # Filtering, matching and normalisation review — 3 October 2026
 
+> Historical audit: behaviour, test totals, data and deployment statements below describe the dated review. See [source-page lifecycle](current-items.md) and [notice selection](notice-selection.md) for current instructions.
+
 The review traced BOM, NSW RFS and Live Traffic NSW through fetch, normalisation, council/product selection, revision detection, storage, web presentation, multipart formatting and queue admission. The requirements used were the documented repository behaviour and its settings: preserve the selected notice's hazard, location, relevant summary/advice, action and source attribution; distinguish collection from confirmed local transmission; retain excluded records for inspection.
 
-This document records the initial review. All six follow-up findings below have now been addressed; see [implementation and validation](filtering-implementation.md) for current behaviour. The historical findings are retained to explain the changes.
+This document records the initial review. All six follow-up findings below have now been addressed; see [implementation and validation](filtering-implementation.md) for the behaviour implemented at that review. The historical findings are retained to explain the changes.
 
 ## Evidence and validation
 
