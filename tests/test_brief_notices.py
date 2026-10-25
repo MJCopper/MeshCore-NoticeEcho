@@ -63,11 +63,81 @@ def test_bom_cause_and_cancellation_scope_survive_briefing():
     parts = brief_bom_parts(alert, "Australia/Sydney", "UPDATE", 126)
     text = readable(parts)
     assert len(parts) <= 2
-    assert "CANCELLED" in parts[0]
-    assert text.index("South West Slopes") < text.index("Orange")
+    assert "CANCELLED" in text
+    assert text.index("ACTIVE:") < text.index("CANCELLED")
+    assert text.index("Orange") < text.index("South West Slopes")
     for fact in ("Orange", "Bowral", "damaging winds", "large hail", "heavy rain", "flash flooding"):
         assert fact in text
     assert "over the next several hours" not in text
+
+
+def test_bom_mixed_sections_prioritize_matched_location_and_filter_unmatched_cancel():
+    from app.geography import KEY, Coverage, configuration
+    alert = Alert(
+        "mixed-scope", "Severe Thunderstorm Warning", "", "", "", "", "Alert",
+        specific_locations="Canberra, Goulburn, Yass, Barraba, Braidwood",
+        warning_summary=("Severe thunderstorms are likely to produce damaging winds and heavy rain. "
+                         "Locations which may be affected include Canberra, Goulburn, Yass, Barraba "
+                         "and Braidwood. The warning for Hunter is CANCELLED."))
+    settings = {KEY: configuration(location_terms=["Barraba"])}
+    coverage = Coverage(True, term_matches=(("Barraba", "affected area"),), method="OR match")
+    parts = brief_bom_parts(alert, "", "UPDATE", 126,
+                            geographic_settings=settings, geographic_coverage=coverage)
+    text = readable(parts)
+    assert "ACTIVE:" in text
+    assert "CANCELLED" not in text
+    assert text.index("Barraba") < text.index("Canberra")
+    assert all(location in text for location in ("Goulburn", "Yass", "Braidwood"))
+    assert all(len(part.encode()) <= 126 for part in parts)
+
+
+def test_bom_mixed_sections_keep_active_first_when_both_match():
+    from app.geography import KEY, Coverage, configuration
+    alert = Alert(
+        "mixed-both", "Severe Thunderstorm Warning", "", "", "", "", "Alert",
+        specific_locations="Canberra, Barraba",
+        warning_summary=("Damaging winds are likely. Locations which may be affected include "
+                         "Canberra and Barraba. The warning for Hunter is CANCELLED."))
+    settings = {KEY: configuration(location_terms=["Barraba", "Hunter"])}
+    coverage = Coverage(True, term_matches=(("Barraba", "affected area"),), method="OR match")
+    text = readable(brief_bom_parts(
+        alert, "", "UPDATE", 126, geographic_settings=settings, geographic_coverage=coverage))
+    assert text.index("ACTIVE:") < text.index("CANCELLED")
+    assert text.index("Barraba") < text.index("Canberra")
+
+
+def test_bom_council_match_keeps_scopes_but_prioritizes_location_term():
+    from app.geography import KEY, Coverage, configuration
+    alert = Alert(
+        "mixed-council", "Severe Thunderstorm Warning", "", "", "", "", "Alert",
+        specific_locations="Canberra, Barraba",
+        warning_summary=("Damaging winds are likely. Locations which may be affected include "
+                         "Canberra and Barraba. The warning for Hunter is CANCELLED."))
+    settings = {KEY: configuration(location_terms=["Barraba"])}
+    coverage = Coverage(True, councils=("Tamworth Regional",),
+                        term_matches=(("Barraba", "affected area"),), method="OR match")
+    text = readable(brief_bom_parts(
+        alert, "", "UPDATE", 126, geographic_settings=settings, geographic_coverage=coverage))
+    assert "CANCELLED" in text
+    assert text.index("Barraba") < text.index("Canberra")
+
+
+def test_bom_marine_sections_filter_and_prioritize_selected_location():
+    from app.bom_enricher import WarningSection
+    from app.geography import KEY, Coverage, configuration
+    alert = Alert(
+        "marine-scope", "Marine Wind Warning", "", "", "", "", "Alert",
+        warning_sections=(
+            WarningSection("Cancellation", "Hunter Coast", "CAN"),
+            WarningSection("Strong Wind Warning", "Sydney Coast, Barraba Coast", "REN"),
+        ))
+    settings = {KEY: configuration(location_terms=["Barraba Coast"])}
+    coverage = Coverage(True, term_matches=(("Barraba Coast", "affected area"),), method="OR match")
+    text = readable(brief_bom_parts(
+        alert, "", "UPDATE", 126, geographic_settings=settings, geographic_coverage=coverage))
+    assert "ACTIVE:" in text
+    assert "CANCELLED" not in text
+    assert text.index("Barraba Coast") < text.index("Sydney Coast")
 
 
 def test_bom_forecast_preserves_locations_after_each_time():

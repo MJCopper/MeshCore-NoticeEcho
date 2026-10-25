@@ -311,10 +311,14 @@ class BomPoller:
                               separators=(",", ":"))
         coverage_hash = hashlib.sha256(coverage.encode()).hexdigest()[:8]
         revision_hash = f"{alert.revision_hash()}:{coverage_hash}"
+        scope_evidence = {}
         try:
             parts = (recovery_parts(latest, revision_hash, budget, force=force) if not dry_run and decision.transmit else None)
             if parts is None:
-                parts = brief_bom_parts(render_alert, tz_name, action, budget)
+                parts = brief_bom_parts(
+                    render_alert, tz_name, action, budget,
+                    geographic_settings=settings, geographic_coverage=geography,
+                    scope_evidence=scope_evidence)
         except RecoveryBlocked as exc:
             item["selection_reason"] = str(exc)
             if latest["detail"] != str(exc):
@@ -331,6 +335,21 @@ class BomPoller:
                                          revision_hash=alert.revision_hash())
                     self._db.add_error("bom", str(exc))
                 return False
+        if scope_evidence:
+            geographic_metadata = dict(item["geographic_coverage"] or {})
+            geographic_metadata["section_projection"] = scope_evidence
+            item["geographic_coverage"] = geographic_metadata
+        if scope_evidence.get("no_matching_scopes") and decision.transmit:
+            decision = Decision("filtered", False,
+                                "Excluded: no selected location matched any BOM warning section")
+            selection = "excluded"
+            geographic_reason = decision.detail
+            coverage_detail = "; " + geography.reason
+            item.update(selection=selection, selection_reason=decision.detail + coverage_detail)
+            area_detail = (coverage_detail + f"; council match: {match.status}"
+                           + (f" ({', '.join(match.councils)})" if match.councils else "")
+                           + (f" via {match.method}" if match.method else ""))
+            parts = []
         logged_text = " || ".join(parts)
 
         if permanently_unsendable(latest, revision_hash, logged_text):

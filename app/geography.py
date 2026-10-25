@@ -42,6 +42,80 @@ def location_matches(fields, positive_terms, exclusions):
     return tuple(dict.fromkeys(matches)), tuple(dict.fromkeys(found)), tuple(dict.fromkeys(suppressed))
 
 
+def bom_location_matches(locations, settings):
+    if active(settings):
+        policy = settings[KEY]
+        if policy.get("all_nsw"):
+            return ()
+        positive_terms = list(policy.get("location_terms", []))
+        if policy.get("version", 1) < 2:
+            positive_terms.extend(policy.get("bom_districts", []))
+        exclusions = policy.get("location_exclusions", [])
+    else:
+        if settings.get("bom_all_councils", True):
+            return ()
+        positive_terms = settings.get("bom_districts", [])
+        exclusions = []
+    if not positive_terms:
+        return ()
+    matches, _, _ = location_matches(
+        ((name, name) for name in locations), positive_terms, exclusions)
+    matched_names = {field for _, field in matches}
+    return tuple(name for name in locations if name in matched_names)
+
+
+def project_bom_sections(sections, settings, coverage):
+    if coverage is None or not getattr(coverage, "included", False):
+        return sections, {}
+    if active(settings):
+        policy = settings[KEY]
+        if policy.get("all_nsw"):
+            return sections, {}
+        has_lexical_match = bool(getattr(coverage, "term_matches", ()) or
+                                 getattr(coverage, "districts", ()))
+        allow_pruning = not getattr(coverage, "councils", ())
+    else:
+        if settings.get("bom_all_councils", True):
+            return sections, {}
+        has_lexical_match = bool(getattr(coverage, "districts", ()))
+        allow_pruning = not getattr(coverage, "councils", ())
+    if not has_lexical_match or getattr(coverage, "method", "") == "uncertain geography":
+        return sections, {}
+
+    original_mixed = (
+        any(core.casefold().startswith("cancelled") for core, _ in sections) and
+        any(not core.casefold().startswith("cancelled") for core, _ in sections)
+    )
+    projected = []
+    pruned = []
+    for core, locations in sections:
+        names = [name.strip() for name in re.split(r",\s*|\s+and\s+", locations or "") if name.strip()]
+        matched = bom_location_matches(names, settings)
+        if not matched and allow_pruning:
+            pruned.append({"status": "cancelled" if core.casefold().startswith("cancelled") else "active",
+                           "locations": names})
+            continue
+        ordered = list(matched) + [name for name in names if name not in set(matched)]
+        projected.append((core, ", ".join(ordered), matched))
+
+    if not projected:
+        return [], {"applied": True, "no_matching_scopes": True,
+                    "reason": "no section-level lexical match", "pruned": pruned}
+
+    if original_mixed:
+        projected = [(core if core.casefold().startswith(("cancelled", "active:")) else "ACTIVE: " + core,
+                      locations, matched)
+                     for core, locations, matched in projected]
+    projected.sort(key=lambda item: item[0].casefold().startswith("cancelled"))
+    evidence = {
+        "applied": True,
+        "matched": [{"status": "cancelled" if core.casefold().startswith("cancelled") else "active",
+                     "locations": list(matched)} for core, _, matched in projected],
+        "pruned": pruned,
+    }
+    return [(core, locations) for core, locations, _ in projected], evidence
+
+
 def terms(values):
     values = values.splitlines() if isinstance(values, str) else values
     result, seen = [], set()

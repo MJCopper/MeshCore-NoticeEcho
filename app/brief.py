@@ -92,7 +92,8 @@ def brief_parts(source, action, topic, sections, optional, note, budget, notice_
                 if location_first:
                     core = locations + (". " + core if core else "")
                 else:
-                    core = (core + " for " if core else "for ") + locations
+                    separator = " " if core.endswith(":") else " for "
+                    core = (core + separator if core else "for ") + locations
             if core:
                 bodies.append(core)
         body = "; ".join(bodies + list(extras)) or note
@@ -132,7 +133,8 @@ def _location_names(value):
     return unique(re.split(r",\s*|\s+and\s+", value or ""))
 
 
-def brief_bom_parts(alert, tz_name, action, budget):
+def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
+                    geographic_coverage=None, scope_evidence=None):
     topic = re.sub(r"^Cancellation of\s+", "", alert.event, flags=re.I)
     from .notice_selection import classify
     classified = classify("bom", "type", topic)
@@ -143,12 +145,16 @@ def brief_bom_parts(alert, tz_name, action, budget):
     sections = []
     if alert.warning_sections:
         ordered = sorted(alert.warning_sections,
-                         key=lambda s: not (s.phase == "CAN" or s.phenomenon.casefold() == "cancellation"))
+                         key=lambda s: s.phase == "CAN" or s.phenomenon.casefold() == "cancellation")
+        has_cancellation = any(s.phase == "CAN" or s.phenomenon.casefold() == "cancellation"
+                               for s in ordered)
         for section in ordered:
             cancelled = section.phase == "CAN" or section.phenomenon.casefold() == "cancellation"
             when = _to_local(section.onset, tz_name)
             day = f"{when.day} {when:%b}" if when else ""
-            core = "CANCELLED" if cancelled else transmission_label(re.sub(r"\s+Warning$", "", section.phenomenon, flags=re.I))
+            core = "CANCELLED:" if cancelled else transmission_label(re.sub(r"\s+Warning$", "", section.phenomenon, flags=re.I))
+            if has_cancellation and not cancelled:
+                core = "ACTIVE: " + core
             if day:
                 core += " " + day
             sections.append((core, section.areas))
@@ -171,11 +177,10 @@ def brief_bom_parts(alert, tz_name, action, budget):
                     scope = re.search(r"(?:the|this) warning for (.+?) (?:is|has been) CANCELLED", sentence, re.I)
                 if scope:
                     scope_name = re.sub(r"^(?:the)\s+|\s+districts?$", "", scope[1], flags=re.I)
-                    cancellations.append(("CANCELLED", scope_name))
+                    cancellations.append(("CANCELLED:", scope_name))
                 else:
                     cancellations.append(("CANCELLED: " + sentence, ""))
                 summary = summary.replace(sentence, "")
-        sections.extend(cancellations)
         # Extract named hazards conservatively; retain negated statements verbatim.
         causes = []
         hazard_names = (
@@ -220,6 +225,11 @@ def brief_bom_parts(alert, tz_name, action, budget):
         if action == "CANCELLED":
             sections = [("", ", ".join(locations))]
         else:
-            sections.append((core, ", ".join(locations)))
+            sections = [(core, ", ".join(locations)), *cancellations]
+    if geographic_settings is not None:
+        from .geography import project_bom_sections
+        sections, evidence = project_bom_sections(sections, geographic_settings, geographic_coverage)
+        if scope_evidence is not None:
+            scope_evidence.update(evidence)
     return brief_parts("BOM", action, topic, sections, optional,
                        "check bom.gov.au", budget, alert.alert_id)

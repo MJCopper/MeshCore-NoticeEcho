@@ -124,7 +124,7 @@ async def test_poller_queues_parts_then_final_verification_with_expected_delays(
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
 
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
 
     await poller._process(_warning_item(), rules, "Australia/Sydney", 0, dry_run=False)
 
@@ -173,7 +173,7 @@ async def test_poller_records_state_only_after_all_multipart_parts_succeed(monke
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
 
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
 
     await poller._process(_warning_item(), rules, "Australia/Sydney", 0, dry_run=False)
 
@@ -196,7 +196,7 @@ async def test_poller_does_not_record_state_when_any_multipart_part_fails(monkey
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
 
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
 
     item = _warning_item("def")
     item["area_desc"] = "Hunter"
@@ -221,7 +221,7 @@ async def test_poller_dry_run_logs_history_and_events_with_final_verification(mo
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
 
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["1/2 BOM NEW Severe Thunderstorm Warning: first", "2/2 second; check bom.gov.au"])
 
     await poller._process(_warning_item("dry-1"), rules, "Australia/Sydney", 0, dry_run=True)
 
@@ -245,7 +245,7 @@ async def test_dry_run_alert_is_queued_when_broadcasting_goes_live(monkeypatch):
     tx = _FakeTx()
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["warning"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["warning"])
     item = _warning_item("dry-to-live")
 
     await poller._process(item, rules, "Australia/Sydney", 0, dry_run=True)
@@ -263,7 +263,7 @@ async def test_history_records_changed_warning_body_once_per_revision(monkeypatc
     tx = _FakeTx()
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["warning"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["warning"])
     item = _warning_item("same-link")
     item["detail"] = "Initial warning details"
 
@@ -285,7 +285,7 @@ async def test_delivery_callback_updates_only_its_history_revision(monkeypatch):
     tx = _FakeTx()
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["warning"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["warning"])
     first = _warning_item("same-link")
     second = {**first, "detail": "Revised content"}
 
@@ -334,10 +334,35 @@ async def test_marine_api_area_change_is_new_revision_without_rss_change(monkeyp
     assert len(db.history_rows) == 2
     assert db.history_rows[0]["revision_hash"] != db.history_rows[1]["revision_hash"]
     assert "Sydney Coast" in db.history_rows[1]["transmitted_text"]
-    assert "CANCELLED for Batemans Coast and Eden Coast" in db.history_rows[1]["transmitted_text"]
+    assert "CANCELLED: Batemans Coast and Eden Coast" in db.history_rows[1]["transmitted_text"]
     assert db.history_rows[1]["transmitted_text"].count("Marine Wind Warning") == 1
     assert "Batemans Coast" in db.history_rows[1]["transmitted_text"]
     assert tx.enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_lexical_coverage_without_matching_rendered_scope_is_not_queued(monkeypatch):
+    from app.bom_enricher import BOMEnrichment
+    from app.geography import KEY, configuration
+
+    db = _FakeDb()
+    db.settings[KEY] = configuration(location_terms=["Barraba"])
+    tx = _FakeTx()
+    poller = BomPoller(db, tx)
+    rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
+
+    async def enrich(_):
+        return BOMEnrichment(area_names=("Barraba",))
+
+    monkeypatch.setattr(poller._enricher, "enrich", enrich)
+    item = {**_warning_item("unmatched-scope"), "references": ["https://example.test/warning"]}
+    await poller._process(item, rules, "Australia/Sydney", 0, dry_run=False)
+
+    assert tx.enqueued == []
+    row = db.history_rows[-1]
+    assert row["disposition"] == "filtered"
+    assert row["transmitted_text"] == ""
+    assert row["metadata"]["geographic_coverage"]["section_projection"]["no_matching_scopes"]
 
 
 @pytest.mark.asyncio
@@ -347,9 +372,9 @@ async def test_existing_dry_run_revision_refreshes_prepared_wording(monkeypatch)
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
     item = _warning_item("same-revision")
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["Wed: warning"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["Wed: warning"])
     await poller._process(item, rules, "Australia/Sydney", 0, dry_run=True)
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["Wednesday: warning"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["Wednesday: warning"])
     await poller._process(item, rules, "Australia/Sydney", 0, dry_run=True)
 
     assert len(db.history_rows) == 2
@@ -409,7 +434,7 @@ async def test_verification_failure_does_not_change_successful_warning_history(m
     tx = _FakeTx()
     poller = BomPoller(db, tx)
     rules = FilterRules(include_exact=[], include_suffix=["Warning"], exclude_exact=[])
-    monkeypatch.setattr("app.poller.brief_bom_parts", lambda alert, tz, action, budget: ["warning"])
+    monkeypatch.setattr("app.poller.brief_bom_parts", lambda *args, **kwargs: ["warning"])
     await poller._process(_warning_item("verified-warning"), rules,
                           "Australia/Sydney", 0, dry_run=False)
     poller._queue_verification(0, dry_run=False)

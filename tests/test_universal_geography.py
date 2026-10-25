@@ -370,6 +370,14 @@ def test_location_exclusions_suppress_only_contained_occurrences(text, included,
         assert 'ignored' in result.reason
 
 
+def test_bom_location_matches_respect_shared_terms_and_exclusions():
+    from app.geography import bom_location_matches
+    policy = configuration(location_terms=['Moonbi'], location_exclusions=['Moonbi Street'])
+    names = ['Moonbi Street', 'Barraba', 'Moonbi']
+    assert bom_location_matches(names, {KEY: policy}) == ('Moonbi',)
+    assert bom_location_matches(['Moonbi Street, Moonbi'], {KEY: policy}) == ('Moonbi Street, Moonbi',)
+
+
 def test_exclusions_keep_separate_fields_and_other_geographic_criteria():
     policy = configuration(location_terms=['Moonbi'], location_exclusions=['Moonbi Street'])
     fields = (('road details', 'near Moonbi Street'), ('suburb', 'Moonbi'))
