@@ -64,3 +64,5 @@ The confirmation flag is an operator assertion, not automatic detection of every
 See [implementation validation](database-maintenance-audit.md).
 
 The shared source catalogue is included in backups and table counts. Absent catalogue entries become eligible for stale-notice cleanup after two successful missing snapshots and the configured grace period since last observation. Pending deliveries are protected; display filtering never deletes records. See [current items](current-items.md).
+
+BOM episode/product identity and reference counters are retained to prevent reference reuse. Closed-episode announcement records follow History retention while pending or recoverable work remains protected. All episode tables are included in verified backups. See [BOM episodes](bom-episodes.md).

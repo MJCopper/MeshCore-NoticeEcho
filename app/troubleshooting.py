@@ -56,6 +56,10 @@ def fingerprint(db, sources):
     values['settings'] = {key:value for key,value in db.all_settings().items() if not key.startswith('maintenance_')}
     values['history'] = rows(db, 'SELECT MAX(id) AS id FROM service_history')
     values['state'] = rows(db, 'SELECT * FROM alert_state ORDER BY alert_id')
+    values['bom_episodes'] = rows(db, 'SELECT * FROM bom_episodes ORDER BY id')
+    values['bom_announcements'] = rows(db, 'SELECT * FROM bom_announcements ORDER BY id')
+    values['bom_products'] = rows(db, 'SELECT * FROM bom_products ORDER BY product_key')
+    values['bom_aliases'] = rows(db, 'SELECT * FROM bom_product_aliases ORDER BY provider_id')
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
@@ -109,7 +113,7 @@ async def replay_source(db, tx, source, snapshot, force, state):
             elif live:
                 poller._enricher = live._enricher
             await poller._process(item, rules, settings.get('display_timezone', 'Australia/Sydney'),
-                                  0, bool(settings.get('dry_run', True)), settings=settings, force=force)
+                                  int(settings.get('meshcore_channel', 0)), bool(settings.get('dry_run', True)), settings=settings, force=force, observe=False)
             # Update selection/detail without refreshing the provider observation timestamp.
             with db._lock:
                 db._conn.execute('UPDATE bom_current SET raw_data=?, selection=?, selection_reason=?, council_match=?, '
@@ -178,6 +182,8 @@ class Troubleshooting:
             with original._lock:
                 original._conn.backup(clone._conn)
             snapshots = {s: current(clone, s) for s in sources}
+            clone._bom_preview_mode = 'dry-run' if original.get_setting('dry_run', True) else 'live'
+            clone._bom_preview_resend = mode == 'resend'
             clone.set_setting('dry_run', True)
             details, exclusions, errors = [], [], []
             try:

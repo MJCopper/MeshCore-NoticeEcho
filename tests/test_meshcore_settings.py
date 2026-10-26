@@ -1,4 +1,5 @@
 import asyncio
+from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
@@ -775,7 +776,10 @@ async def test_channels_above_seven_are_discovered_and_created():
     created = await radio.add_channel("Weather")
     assert created["index"] == 9
     channels = await radio.read_channels()
-    assert {"index": 9, "name": "Weather"} in channels
+    saved = next(channel for channel in channels if channel['index'] == 9)
+    assert saved['name'] == 'Weather'
+    assert saved['identity'] == sha256(radio._mc.commands.secrets[9]).hexdigest()
+    assert 'channel_secret' not in saved
     await radio.rename_channel(9, "Alerts")
     await radio.remove_channel(9)
 

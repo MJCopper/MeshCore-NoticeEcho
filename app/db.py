@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from .config import DEFAULT_SETTINGS, STATE_EXPIRY_HOURS
 from . import catalogue
+from . import bom_episodes
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -195,6 +196,7 @@ def _now() -> str:
 
 
 SCHEMA += catalogue.SCHEMA
+SCHEMA += bom_episodes.SCHEMA
 
 
 class Database:
@@ -217,6 +219,8 @@ class Database:
         self._seed_settings()
         self._migrate_notice_groups()
         self._upgrade_catalogue()
+        self.bom_episodes = bom_episodes.Episodes(self)
+        self.bom_episodes.bootstrap()
 
     def _migrate_notice_groups(self):
         from .notice_selection import grouped_policy, validate
@@ -499,6 +503,8 @@ class Database:
                                    (json.dumps(item), region, item["id"]))
             rows = self._conn.execute("SELECT * FROM bom_current WHERE region='NSW'").fetchall()
             self._catalogue_snapshot("bom", rows, successful_regions, fetched_at)
+            if hasattr(self, 'bom_episodes'):
+                self.bom_episodes.observe_snapshot(self._conn, [item for item in items if item.get('region', 'NSW') in successful_regions], fetched_at)
             self._conn.commit()
 
     def bom_current_items(self, regions: list[str], limit: int = 500):
@@ -582,13 +588,13 @@ class Database:
         self, source: str, external_id: str, title: str, area: str = "",
         disposition: str = "", transmitted_text: str = "", detail: str = "",
         transmit_status: Optional[str] = None, revision_hash: str = "",
-        metadata: Optional[dict] = None,
+        metadata: Optional[dict] = None, bom_announcement=None,
     ) -> int:
         from .history import get_history_source
         if get_history_source(source) is None:
             # Sources must register before writing; a typo must not fork history.
             raise ValueError(f"unregistered history source: {source}")
-        with self._lock:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 """INSERT INTO service_history
                    (ts, source, external_id, title, area, disposition,
@@ -598,6 +604,9 @@ class Database:
                  transmit_status, transmitted_text, detail, revision_hash,
                  json.dumps(metadata or {})),
             )
+            if bom_announcement is not None:
+                if not self.bom_episodes._register(self._conn, history_id=cur.lastrowid, **bom_announcement):
+                    raise bom_episodes.AnnouncementExists()
             self._conn.commit()
             return cur.lastrowid
 
@@ -770,11 +779,11 @@ class Database:
         self, alert_id: str, event: str, area: str, disposition: str,
         transmitted_text: str = "", detail: str = "",
         transmit_status: Optional[str] = None, revision_hash: str = "",
-        metadata: Optional[dict] = None,
+        metadata: Optional[dict] = None, bom_announcement=None,
     ) -> int:
         return self.add_service_history(
             "bom", alert_id, event, area, disposition, transmitted_text,
-            detail, transmit_status, revision_hash, metadata,
+            detail, transmit_status, revision_hash, metadata, bom_announcement=bom_announcement,
         )
 
     def latest_history(self, alert_id: str):

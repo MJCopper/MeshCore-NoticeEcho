@@ -188,7 +188,8 @@ async def test_adding_district_reconsiders_confirmed_warning_but_does_not_repeat
     db.set_setting("bom_districts",["Hunter"])
     await poller._process(item,FilterRules([],["Warning"],[]),"Australia/Sydney",0,True)
     row=db.latest_history("geo")
-    assert row["transmit_status"]=="dry-run" and row["disposition"]=="update"
+    assert row["transmit_status"]=="dry-run" and row["disposition"]=="sent"
+    assert json.loads(row["metadata"])["bom_episode"]["action"] == "NEW"
     assert json.loads(row["metadata"])["selected_districts"]==["Hunter"]
     assert "forecast district match" in row["detail"]
     count=len(db.query_service_history(source="bom"))
@@ -223,6 +224,10 @@ async def test_mixed_warning_sends_only_cancellation_for_previously_sent_product
                 on_result(i,True,"")
             return True
     radio=Radio()
+    from app.bom_episodes import destination
+    episode = db.bom_episodes.observe(Alert.from_bom(item))
+    introduction = db.add_history("mixed", "Flood Warning", "Hunter", "sent", "Earlier warning", transmit_status="success")
+    db.bom_episodes.register(episode, "live", destination(db.all_settings(), 0), "previous", "NEW", introduction)
     poller=BomPoller(db,radio)
     await poller._process(item,FilterRules([],["Warning"],[]),"Australia/Sydney",0,False)
     text=" ".join(radio.parts)
@@ -237,7 +242,7 @@ async def test_mixed_warning_sends_only_cancellation_for_previously_sent_product
 
 
 @pytest.mark.asyncio
-async def test_legacy_confirmed_warning_does_not_repeat_after_or_upgrade():
+async def test_global_legacy_live_flag_does_not_suppress_first_dry_run_episode():
     from app.db import Database
     from app.poller import BomPoller
     from app.filters import FilterRules
@@ -258,8 +263,9 @@ async def test_legacy_confirmed_warning_does_not_repeat_after_or_upgrade():
                 area_desc=candidate.area_desc, message_type="Alert", references=[])
     await poller._process(item, FilterRules([], ["Warning"], []), "Australia/Sydney", 0, True)
     rows = db.query_service_history(source="bom")
-    assert rows[0]["disposition"] == "duplicate"
-    assert rows[0]["transmit_status"] is None
+    assert rows[0]["disposition"] == "sent"
+    assert rows[0]["transmit_status"] == "dry-run"
+    assert rows[0]["metadata"]["bom_episode"]["action"] == "NEW"
     assert rows[-1]["transmitted_text"] == "Previously confirmed message"
     await poller._process(item, FilterRules([], ["Warning"], []), "Australia/Sydney", 0, True)
     assert len(db.query_service_history(source="bom")) == len(rows)

@@ -159,6 +159,10 @@ async def test_cancellation_of_sent_warning_is_not_lost_when_area_is_unknown():
                     disposition="sent", sent_ts="2026-10-01T00:00:00+00:00")
     poller = BomPoller(db, Radio())
     item = warning("cancel", "Hunter")
+    from app.bom_episodes import destination
+    episode = db.bom_episodes.observe(Alert.from_bom(item))
+    introduction = db.add_history("cancel", "Flood Warning", "Hunter", "sent", "Earlier dry-run warning", transmit_status="dry-run")
+    db.bom_episodes.register(episode, "dry-run", destination(db.all_settings(), 0), "previous", "NEW", introduction)
     item["message_type"] = "Cancel"
     await poller._process(item, FilterRules([], ["Warning"], []),
                           "Australia/Sydney", 0, True)

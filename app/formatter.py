@@ -214,7 +214,7 @@ def compact_topic(topic: str, source: str, action: str, max_bytes: int,
 
 
 def frame_notice(source: str, action: str, topic: str, sections: list,
-                 source_note: str, max_bytes: int, notice_id: str, protected_phrases=()) -> list[str]:
+                 source_note: str, max_bytes: int, notice_id: str, protected_phrases=(), reference: str | None = None) -> list[str]:
     """Number parts first; identify the ordered notice only in its first part.
 
     Preserve labels when marine sections change action or hazard type.
@@ -242,7 +242,8 @@ def frame_notice(source: str, action: str, topic: str, sections: list,
     note = source_note.strip(" ;")
     if note and bodies[-1].strip(" .;") != note:
         bodies[-1] = bodies[-1].rstrip(" .;") + "; " + note
-    reference = hashlib.sha256(notice_id.encode("utf-8")).hexdigest()[:4].upper()
+    explicit_reference = reference is not None
+    reference = reference or hashlib.sha256(notice_id.encode("utf-8")).hexdigest()[:4].upper()
     estimate = 1
     for _ in range(30):
         output = []
@@ -254,7 +255,7 @@ def frame_notice(source: str, action: str, topic: str, sections: list,
                 index = len(output) + 1
                 marker = f"{index}/{estimate} " if estimate > 1 else ""
                 header = (f"{source} {first_action}" +
-                          (f" #{reference}" if estimate > 1 else "") + f" {first_topic}") if index == 1 else ""
+                          (f" #{reference}" if estimate > 1 or explicit_reference else "") + f" {first_topic}") if index == 1 else ""
                 joiner = _notice_joiner(remaining) if header else ""
                 prefix = marker + header + joiner
                 room = max_bytes - _byte_len(prefix)

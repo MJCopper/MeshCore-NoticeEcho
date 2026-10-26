@@ -4,12 +4,14 @@
     <span class="rec-time">{{ r.ts | localtime(tz) }}{% if r.transmitted_at %} · confirmed {{ r.transmitted_at | localtime(tz) }}{% endif %}</span>
     <span>
       <span class="pill radio">{{ r.source_label }}</span>
+      {% if r.metadata.bom_episode %}<span class="pill radio">{{ r.metadata.bom_episode.action }} #{{ r.metadata.bom_episode.reference }}</span>{% endif %}
       {% if r.id in superseded_ids %}<span class="pill">Earlier revision</span>{% endif %}
       {% if r.disposition %}<span class="pill {{ r.disposition }}">{{ disp_label.get(r.disposition, r.disposition) }}</span>{% endif %}
       {% if r.transmit_status %}<span class="pill {{ r.transmit_status }}">{{ tx_label.get(r.transmit_status, r.transmit_status) }}</span>{% endif %}
     </span>
   </div>
   <div class="rec-event">{% if r.metadata.level %}{{ r.metadata.level }} · {% endif %}{{ r.title }}</div>
+  {% if r.metadata.bom_episode %}<p class="hint">BOM episode #{{ r.metadata.bom_episode.reference }} · {{ r.metadata.bom_episode.mode }} · {{ r.metadata.bom_episode.scope or 'Scope not recorded' }}{% if r.metadata.bom_episode.closure_reason %} · {{ r.metadata.bom_episode.closure_reason }}{% endif %}</p>{% endif %}
   <div class="rec-msgrow">
     <div class="rec-msgwrap">
       <div class="rec-lbl">Prepared message</div>

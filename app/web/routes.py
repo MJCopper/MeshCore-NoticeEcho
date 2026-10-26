@@ -560,6 +560,7 @@ async def bom_page(request: Request, page: int = Query(1, ge=1), view: View = Qu
             item[key] = json.loads(item[key] or "[]")
         raw = json.loads(item.get("raw_data") or "{}")
         item["matched_districts"] = raw.get("matched_districts", [])
+        item["bom_episode"] = raw.get("bom_episode")
         item["geographic_match_method"] = raw.get("geographic_match_method", "")
         item["provider_areas"] = [area | {"label": area_labels.get(area["type"], "Provider area")}
                                   for area in item["provider_areas"]]

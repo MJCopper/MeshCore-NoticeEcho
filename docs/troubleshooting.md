@@ -65,3 +65,5 @@ Compare `clock` with server time, introduce an offset with `time <epoch>`, and v
 ## Database maintenance
 
 Manage retention, protected history, storage, scheduled runs, verified backups and integrity checks under **Settings → Database Maintenance**. Scheduled cleanup is independent of service polling. See [database maintenance](database-maintenance.md).
+
+BOM previews and newly prepared messages show [episode references](bom-episodes.md). Explicit resend uses RESEND; ordinary re-processing preserves duplicate suppression. Dry Run and live announcement histories are separate. Previewing or replaying saved data does not advance episode disappearance counters or allocate a missing production episode; poll BOM first when episode identity is unavailable.

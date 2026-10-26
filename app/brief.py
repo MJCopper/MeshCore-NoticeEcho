@@ -64,7 +64,7 @@ def unique(values):
 
 
 def brief_parts(source, action, topic, sections, optional, note, budget, notice_id,
-                location_first=False):
+                location_first=False, reference=None):
     """Sections are (required context, full locations); optional detail never adds parts.
 
     A third part is permitted only when removing locations makes the required
@@ -103,7 +103,7 @@ def brief_parts(source, action, topic, sections, optional, note, budget, notice_
                 "no locations omitted. Full notice remains available.")
         try:
             return frame_notice(source, action, topic, [body], note, budget, notice_id,
-                                protected_phrases=protected if include_locations else [note])
+                                protected_phrases=protected if include_locations else [note], reference=reference)
         except ValueError as exc:
             raise NoticeTooLong(f"Formatting blocked: {source} required content cannot fit the radio byte budget; no locations omitted.") from exc
 
@@ -134,7 +134,9 @@ def _location_names(value):
 
 
 def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
-                    geographic_coverage=None, scope_evidence=None):
+                    geographic_coverage=None, scope_evidence=None, episode_reference=None,
+                    cancellation=False):
+    cancelled_notice = cancellation or action == "CANCELLED"
     topic = re.sub(r"^Cancellation of\s+", "", alert.event, flags=re.I)
     from .notice_selection import classify
     classified = classify("bom", "type", topic)
@@ -220,10 +222,10 @@ def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
         timing = ("from " + onset + " " if onset else "") + ("until " + until if until else "")
         if timing:
             core = "; ".join(x for x in (core, timing) if x)
-        if cancellations and action != "CANCELLED":
+        if cancellations and not cancelled_notice:
             core = "ACTIVE" + (": " + core.removeprefix("Risk: ") if core else "")
-        if action == "CANCELLED":
-            sections = [("", ", ".join(locations))]
+        if cancelled_notice:
+            sections = [("CANCELLED:" if action == "RESEND" else "", ", ".join(locations))]
         else:
             sections = [(core, ", ".join(locations)), *cancellations]
     if geographic_settings is not None:
@@ -232,4 +234,4 @@ def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
         if scope_evidence is not None:
             scope_evidence.update(evidence)
     return brief_parts("BOM", action, topic, sections, optional,
-                       "check bom.gov.au", budget, alert.alert_id)
+                       "check bom.gov.au", budget, alert.alert_id, reference=episode_reference)

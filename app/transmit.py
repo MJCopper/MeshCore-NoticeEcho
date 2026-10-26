@@ -371,7 +371,16 @@ class MeshCoreTransmitter(Transmitter):
             name = (p.get("channel_name") or "").strip()
             if not name:
                 continue  # empty/unconfigured slot
-            out.append({"index": int(p.get("channel_idx", idx)), "name": name})
+            channel = {"index": int(p.get("channel_idx", idx)), "name": name}
+            secret = p.get("channel_secret")
+            if isinstance(secret, str):
+                try:
+                    secret = bytes.fromhex(secret)
+                except ValueError:
+                    secret = None
+            if isinstance(secret, (bytes, bytearray)):
+                channel["identity"] = sha256(secret).hexdigest()
+            out.append(channel)
         return out
 
     async def read_info(self) -> dict:

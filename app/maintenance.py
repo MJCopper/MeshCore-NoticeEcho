@@ -17,7 +17,7 @@ DEFAULTS = {"maintenance_enabled": True, "maintenance_history_days": 90,
             "maintenance_backup_keep": 7}
 TABLES = ("settings", "service_history", "transmit_log", "errors", "events",
           "bom_current", "alert_state", "rfs_incidents", "traffic_items", "history", "rfs_history",
-          "source_catalogue", "source_snapshots")
+          "source_catalogue", "source_snapshots", "bom_products", "bom_product_aliases", "bom_episodes", "bom_announcements")
 PENDING = "('queued','deferred','failed','interrupted')"
 # Keep identity anchors even after stale current records leave the snapshot.
 PROTECTED = f"""COALESCE(transmit_status,'') IN {PENDING}
@@ -102,6 +102,10 @@ def clean(db, settings):
     cutoff = lambda days: (now-timedelta(days=days)).isoformat(timespec="seconds")
     stale = cutoff(settings["maintenance_stale_days"])
     queries = {
+        "bom_announcements": (f"created<? AND state NOT IN {PENDING} AND state!='submitting' "
+                              "AND EXISTS (SELECT 1 FROM bom_episodes e WHERE e.id=bom_announcements.episode_id AND e.state='closed') "
+                              f"AND NOT EXISTS (SELECT 1 FROM service_history h WHERE h.id=bom_announcements.history_id AND h.transmit_status IN {PENDING})",
+                              (cutoff(settings["maintenance_history_days"]),)),
         "source_catalogue": (f"present=0 AND missing_polls>=2 AND last_seen<? AND NOT EXISTS "
                              f"(SELECT 1 FROM service_history h WHERE h.source=source_catalogue.source "
                              f"AND (h.external_id=source_catalogue.item_id OR (h.source='traffic' AND "
