@@ -15,7 +15,7 @@ from .. import __version__
 from ..config import MAX_PAYLOAD_BYTES, MIN_POLL_MINUTES, polling_seconds, safety_warning_text as valid_warning_text
 from ..rfs.councils import COUNCILS
 from ..meshcore_discovery import list_usb_serial_devices
-from ..presentation import freshness, listing_status
+from ..presentation import freshness, listing_status, rfs_notice_display
 from ..catalogue import View
 
 
@@ -206,7 +206,9 @@ def _dash_ctx(request) -> dict:
             break
     recent = [{
         "source": history_source_label(r["source"] if "source" in r.keys() else "bom"),
-        "event": r["title"] if "title" in r.keys() else r["event"],
+        "event": (rfs_notice_display(r["title"], r.get("metadata"))["heading"] if r.get("source") == "rfs"
+                  else r["title"] if "title" in r.keys() else r["event"]),
+        "rfs_display": rfs_notice_display(r["title"], r.get("metadata")) if r.get("source") == "rfs" else None,
         "area": r["area"], "disposition": r["disposition"],
         "transmit_status": r["transmit_status"], "detail": r["detail"],
         "text": r["transmitted_text"],
@@ -394,6 +396,8 @@ def _history_context(request, source="", disposition="", transmit_status="",
     rows = db.query_service_history(**kwargs)
     for row in rows:
         row["source_label"] = history_source_label(row["source"])
+        if row["source"] == "rfs":
+            row["rfs_display"] = rfs_notice_display(row["title"], row.get("metadata"))
     return dict(rows=rows, superseded_ids=_superseded_history_ids(rows),
                 source=source, sources=history_sources(), selected_source=selected,
                 disposition=disposition, transmit_status=transmit_status,

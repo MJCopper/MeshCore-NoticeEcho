@@ -10,7 +10,8 @@
       {% if r.transmit_status %}<span class="pill {{ r.transmit_status }}">{{ tx_label.get(r.transmit_status, r.transmit_status) }}</span>{% endif %}
     </span>
   </div>
-  <div class="rec-event">{% if r.metadata.level %}{{ r.metadata.level }} · {% endif %}{{ r.title }}</div>
+  <div class="rec-event">{% if r.rfs_display %}{{ r.rfs_display.heading }}{% else %}{% if r.metadata.level %}{{ r.metadata.level }} · {% endif %}{{ r.title }}{% endif %}</div>
+  {% if r.rfs_display %}<p class="hint">Alert level: {{ r.rfs_display.alert_level }} · Incident status: {{ r.rfs_display.status }}</p>{% endif %}
   {% if r.metadata.bom_episode %}<p class="hint">BOM episode #{{ r.metadata.bom_episode.reference }} · {{ r.metadata.bom_episode.mode }} · {{ r.metadata.bom_episode.scope or 'Scope not recorded' }}{% if r.metadata.bom_episode.closure_reason %} · {{ r.metadata.bom_episode.closure_reason }}{% endif %}</p>{% endif %}
   <div class="rec-msgrow">
     <div class="rec-msgwrap">
@@ -29,9 +30,9 @@
     <div class="rec-area">{{ r.metadata.region }} · {{ r.metadata.council_match or 'unknown' }}{% if r.metadata.matched_councils %}: {{ r.metadata.matched_councils|join(', ') }}{% endif %}{% if r.metadata.match_method %} ({{ r.metadata.match_method }}){% endif %} · {{ r.metadata.selection or 'not selected' }}</div>
   </div>
   {% endif %}
-  {% if r.area or r.metadata.status %}
-  <div class="rec-areawrap"><div class="rec-lbl">Area and status</div>
-    <div class="rec-area">{{ r.area }}{% if r.metadata.status %} · {{ r.metadata.status }}{% endif %}</div>
+  {% if r.area or (r.metadata.status and not r.rfs_display) %}
+  <div class="rec-areawrap"><div class="rec-lbl">{{ 'Area' if r.rfs_display else 'Area and status' }}</div>
+    <div class="rec-area">{{ r.area }}{% if r.metadata.status and not r.rfs_display %} · {{ r.metadata.status }}{% endif %}</div>
   </div>
   {% endif %}
   {% if r.metadata.match_reason or r.metadata.enrichment_status %}

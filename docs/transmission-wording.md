@@ -6,6 +6,8 @@ Whole values matching Not Applicable, N/A, Unrecognized/Unrecognised, Not suppli
 
 RFS keeps meaningful alert levels. If the level is a placeholder, its meaningful incident type becomes the heading; otherwise the fallback is Incident. A cause equivalent to the heading is included only once. Meaningful statuses and locations remain required.
 
+The web interface separately uses incident headings with labelled alert-level and incident-status details; see [RFS display rules](rfs-display.md). That display change does not alter transmitted messages or their recorded text.
+
 Traffic prefers the raw category when available, then the useful provider title, then Traffic notice. It removes an equivalent leading category from the title only at a word or punctuation boundary. If a placeholder category prefixes the title, that prefix is removed before choosing the title as the heading. Missing raw classification does not promote a parser-generated display category.
 
 BOM preserves useful warning, watch, advice and alert types, including unfamiliar provider event wording. A placeholder-only event becomes Weather notice. Placeholder section classifications are also omitted while keeping affected locations and cancellation scope. Existing thunderstorm subtype and qualifier handling remains active.

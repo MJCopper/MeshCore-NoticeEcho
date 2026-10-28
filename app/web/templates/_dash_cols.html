@@ -5,6 +5,7 @@
   <div class="arow">
     <div>
       <div class="ev"><span class="pill radio">{{ a.source }}</span> {{ a.event }}</div>
+      {% if a.rfs_display %}<div class="meta">Alert level: {{ a.rfs_display.alert_level }} · Incident status: {{ a.rfs_display.status }}</div>{% endif %}
       <div class="meta">{{ a.area or a.detail }}</div>
       {% if a.text %}<div class="txt">{{ a.text }}</div>{% endif %}
     </div>
