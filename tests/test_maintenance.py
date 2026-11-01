@@ -39,9 +39,10 @@ def sql(db,query,args=()):
 
 
 @pytest.mark.parametrize('source',['bom','rfs','traffic'])
-def test_retention_preserves_latest_decision_broadcast_and_closure_anchor(db,source):
+@pytest.mark.parametrize('status',['success','accepted'])
+def test_retention_preserves_latest_decision_broadcast_and_closure_anchor(db,source,status):
     obsolete=history(db,source,status=None)
-    done=history(db,source,status='success')
+    done=history(db,source,status=status)
     excluded=history(db,source,status=None)
     preview=history(db,source,status='dry-run')
     latest=history(db,source,status=None)

@@ -78,7 +78,7 @@ def test_source_note_stays_with_last_part_when_it_fits():
 
 
 @pytest.mark.asyncio
-async def test_unreadable_local_tx_counter_is_not_reported_as_success(monkeypatch):
+async def test_unreadable_counter_records_acceptance_without_rf_confirmation(monkeypatch):
     import sys
 
     monkeypatch.setitem(sys.modules, "meshcore", SimpleNamespace(EventType=SimpleNamespace(ERROR="error")))
@@ -98,7 +98,7 @@ async def test_unreadable_local_tx_counter_is_not_reported_as_success(monkeypatc
     from app.transmission import TransmissionPolicy
     radio.policy = TransmissionPolicy(confirmation_seconds=0.01)
     result = await radio.send_text("warning", 0)
-    assert result.outcome == "unconfirmed"
+    assert result.outcome == "accepted"
     assert not result.confirmed
     assert result  # continuation is permitted; confirmation is not claimed
     assert calls == [(0, "warning")]

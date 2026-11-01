@@ -1,6 +1,8 @@
 """Independent, bounded SQLite retention and verified snapshot backups."""
 from __future__ import annotations
 
+from .transmission import NOTICE_COMPLETED, sql_states
+
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -23,7 +25,7 @@ PENDING = "('queued','deferred','failed','interrupted')"
 PROTECTED = f"""COALESCE(transmit_status,'') IN {PENDING}
  OR id IN (SELECT MAX(id) FROM service_history GROUP BY source,external_id)
  OR id IN (SELECT MAX(id) FROM service_history WHERE transmit_status IS NOT NULL GROUP BY source,external_id)
- OR id IN (SELECT MAX(id) FROM service_history WHERE transmit_status IN ('success','repeat_confirmed','unconfirmed') GROUP BY source,external_id)
+ OR id IN (SELECT MAX(id) FROM service_history WHERE transmit_status IN {sql_states(NOTICE_COMPLETED)} GROUP BY source,external_id)
  OR id IN (SELECT service_history_id FROM transmit_log WHERE service_history_id IS NOT NULL AND (outcome='submitting' OR json_extract(evidence,'$.retry_pending')=1 OR COALESCE(json_extract(evidence,'$.repeat_expires_at'),0)>CAST(strftime('%s','now') AS INTEGER)))"""
 
 

@@ -181,9 +181,13 @@ async def test_connection_callbacks_request_check_and_are_cleaned_up(monkeypatch
     assert await manager._open_once(transport)==''
     assert manager._clock.pending
     manager._clock.pending=False
-    await subscriptions[EventType.CONNECTED](SimpleNamespace())
+    radio._counter_session_trusted=False
+    old_session=radio._counter_session
+    await subscriptions[EventType.CONNECTED](SimpleNamespace(type=EventType.CONNECTED))
     assert manager._clock.pending
-    await subscriptions[EventType.DISCONNECTED](SimpleNamespace())
+    assert radio._counter_session_trusted and radio._counter_session!=old_session
+    await subscriptions[EventType.DISCONNECTED](SimpleNamespace(type=EventType.DISCONNECTED))
+    assert not radio._counter_session_trusted
     assert len(radio._clock_subscriptions)==2
     await radio.close()
     assert not subscriptions

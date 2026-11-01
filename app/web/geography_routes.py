@@ -1,5 +1,6 @@
 """Read-only geographic previews and explicit universal-policy activation."""
 from dataclasses import fields
+from ..transmission import NOTICE_COMPLETED, sql_states
 import json
 from types import SimpleNamespace
 
@@ -30,7 +31,7 @@ class ListingEvidence:
                 if ids:
                     placeholders = ",".join("?" for _ in ids)
                     saved = db._conn.execute(f"SELECT * FROM service_history WHERE source=? AND external_id IN ({placeholders}) "
-                                             "AND transmit_status IN ('success','repeat_confirmed','unconfirmed') ORDER BY id DESC",
+                                             f"AND transmit_status IN {sql_states(NOTICE_COMPLETED)} ORDER BY id DESC",
                                              (source, *ids)).fetchall()
                     for row in saved:
                         self.broadcasts.setdefault((source, row["external_id"]), row)

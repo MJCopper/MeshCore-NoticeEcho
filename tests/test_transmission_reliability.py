@@ -97,8 +97,8 @@ def history(db, parts=2):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('counter,outcome', [('unavailable','unconfirmed'), ('missing','unconfirmed'),
-                                            ('flat','unconfirmed'), ('reset','unconfirmed'),
+@pytest.mark.parametrize('counter,outcome', [('unavailable','accepted'), ('missing','accepted'),
+                                            ('flat','accepted'), ('reset','accepted'),
                                             ('advances','local_confirmed')])
 async def test_counter_outcomes_are_honest(counter, outcome):
     radio, commands = make_radio(counter=counter)
@@ -221,7 +221,7 @@ async def test_unconfirmed_first_part_does_not_cancel_second_and_history_is_trut
     db = Database(':memory:')
     db.set_setting('dry_run', False)
     row = history(db)
-    radio, commands = make_radio()
+    radio, commands = make_radio(response='timeout')
     tx, _ = manager(db, radio)
     outcomes = []
 
@@ -246,7 +246,7 @@ async def test_unconfirmed_first_part_does_not_cancel_second_and_history_is_trut
 @pytest.mark.asyncio
 async def test_optional_retry_once_before_next_part_and_budget_is_persisted():
     db = Database(':memory:')
-    radio, commands = make_radio()
+    radio, commands = make_radio(response='timeout')
     tx, transport = manager(db, radio)
     row = history(db)
     policy = replace(FAST, retry_unconfirmed=True)
@@ -267,7 +267,7 @@ async def test_optional_retry_once_before_next_part_and_budget_is_persisted():
 @pytest.mark.asyncio
 async def test_late_repeat_cancels_optional_retry_and_updates_database():
     db = Database(':memory:')
-    radio, commands = make_radio()
+    radio, commands = make_radio(response='timeout')
     tx, transport = manager(db, radio)
     row = history(db,1)
 
@@ -289,7 +289,7 @@ async def test_late_repeat_cancels_optional_retry_and_updates_database():
 @pytest.mark.asyncio
 async def test_late_repeat_after_completion_upgrades_history_and_never_downgrades():
     db = Database(':memory:')
-    radio, commands = make_radio()
+    radio, commands = make_radio(response='timeout')
     tx, transport = manager(db,radio)
     row = history(db,1)
     result,_ = await tx._try_send(transport,'warning',0,policy=FAST,context=(row,0,1))
@@ -306,7 +306,7 @@ async def test_late_repeat_after_completion_upgrades_history_and_never_downgrade
 @pytest.mark.asyncio
 async def test_delayed_counter_recovery_suppresses_retry():
     db = Database(':memory:')
-    radio, commands = make_radio(counter='flat')
+    radio, commands = make_radio(counter='flat', response='timeout')
     tx, transport = manager(db,radio)
     async def advance():
         await asyncio.sleep(0.015)
@@ -321,7 +321,7 @@ async def test_delayed_counter_recovery_suppresses_retry():
 @pytest.mark.asyncio
 async def test_live_guard_rechecked_after_preparation_and_before_retry():
     db = Database(':memory:')
-    radio, commands = make_radio()
+    radio, commands = make_radio(response='timeout')
     tx, transport = manager(db,radio)
     eligible = [True]
     commands.after_send = lambda: eligible.__setitem__(0,False)
@@ -358,7 +358,8 @@ def test_legacy_unknown_counter_migrates_without_inventing_confirmation(tmp_path
     path = str(tmp_path/'legacy.db')
     db = Database(path)
     row = history(db)
-    db.record_delivery_part(row,0,2,False,'local TX counter unavailable; transmission cannot be confirmed')
+    db._conn.execute("UPDATE service_history SET delivery_parts=? WHERE id=?", (json.dumps([{'status':'failed','error':'local TX counter unavailable; transmission cannot be confirmed'}, {'status':'pending'}]),row))
+    db._conn.commit()
     db.update_service_history(row,'failed')
     db.close()
     reopened = Database(path)
@@ -373,10 +374,10 @@ async def test_manual_test_resend_and_verification_share_evidence_handling():
     db.set_setting('dry_run',False)
     radio, commands = make_radio()
     tx,_ = manager(db,radio)
-    assert (await tx.send_manual('manual')).outcome == 'unconfirmed'
-    assert (await tx.send_test('test')).outcome == 'unconfirmed'
-    assert (await tx.send_to('meshcore','bench'))[0].outcome == 'unconfirmed'
-    assert (await tx.resend('meshcore','resend',2))[0].outcome == 'unconfirmed'
+    assert (await tx.send_manual('manual')).outcome == 'accepted'
+    assert (await tx.send_test('test')).outcome == 'accepted'
+    assert (await tx.send_to('meshcore','bench'))[0].outcome == 'accepted'
+    assert (await tx.resend('meshcore','resend',2))[0].outcome == 'accepted'
     assert [entry[0] for entry in commands.calls] == [0,1,1,2]
     outcomes = []
     def callback(result,error):
@@ -384,8 +385,8 @@ async def test_manual_test_resend_and_verification_share_evidence_handling():
         tx._stopped = True
     tx.enqueue_verification('verify',callback)
     await asyncio.wait_for(tx._worker(),1)
-    assert outcomes == ['unconfirmed']
-    assert all(log['outcome'] == 'unconfirmed' and log['success'] is None for log in db.query_transmit_log())
+    assert outcomes == ['accepted']
+    assert all(log['outcome'] == 'accepted' and log['success'] is None for log in db.query_transmit_log())
 
 
 def test_policy_bounds_and_defaults():
@@ -432,9 +433,9 @@ async def test_counter_requests_obey_real_elapsed_deadline():
     radio._flood_tx = stats
     started = time.monotonic()
     result = await radio.send_text('warning',0)
-    assert result.outcome == 'unconfirmed'
+    assert result.outcome == 'accepted'
     assert time.monotonic()-started < 0.2
-    assert radio.counter_error == 'statistics request timed out'
+    assert 'statistics request timed out' in radio.counter_error.lower()
 
 
 @pytest.mark.asyncio
@@ -510,7 +511,8 @@ class CaptureTx:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('source',['bom','rfs','traffic'])
-async def test_service_callbacks_persist_uncertainty_and_subsequent_polls_do_not_resend(source):
+@pytest.mark.parametrize('outcome',['accepted','unconfirmed'])
+async def test_service_callbacks_persist_uncertainty_and_subsequent_polls_do_not_resend(source,outcome):
     from datetime import datetime,timedelta,timezone
     from app.filters import FilterRules
     from app.poller import BomPoller
@@ -547,10 +549,10 @@ async def test_service_callbacks_persist_uncertainty_and_subsequent_polls_do_not
     parts,callback,context=tx.sent[0]
     assert context is not None
     for index in range(len(parts)):
-        callback(index,TxResult('unconfirmed',submitted=True,accepted=True),'local TX counter unavailable')
+        callback(index,TxResult(outcome,submitted=True,accepted=outcome=='accepted'),'')
     saved=db.query_service_history(source=source)[0]
-    assert saved['transmit_status']=='unconfirmed'
-    assert all(part['status']=='unconfirmed' for part in saved['delivery_parts'])
+    assert saved['transmit_status']==outcome
+    assert all(part['status']==outcome for part in saved['delivery_parts'])
     await poll()
     assert len(tx.sent)==1
     assert not db.recent_errors()
@@ -599,7 +601,7 @@ async def test_connection_settings_save_validate_and_render_confirmation_control
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
         page=await client.get('/settings/meshcore')
         assert page.status_code==200
-        assert 'Retry once when transmission cannot be verified' in page.text
+        assert 'Retry once when the send command outcome is unknown' in page.text
         assert 'Advanced verification settings' in page.text
         assert 'Use heard repeats as additional transmission evidence' in page.text
         before=db.all_settings()
@@ -618,19 +620,19 @@ async def test_connection_settings_save_validate_and_render_confirmation_control
         db.add_transmit_log(0,7,log,'warning')
         response=await client.get('/transmit-log')
         assert response.status_code==200
-        assert 'Unconfirmed' in response.text
+        assert 'Command outcome unknown' in response.text
         assert 'Heard repeats:' in response.text
         assert 'Counter unavailable' in response.text
         dashboard=await client.get('/')
         assert dashboard.status_code==200
-        assert 'Unconfirmed -' in dashboard.text
+        assert 'Command outcome unknown -' in dashboard.text
 
 
 @pytest.mark.asyncio
 async def test_uncertainty_retry_preserves_complete_multipart_order():
     db=Database(':memory:')
     db.set_setting('dry_run',False)
-    radio,commands=make_radio()
+    radio,commands=make_radio(response='timeout')
     tx,_=manager(db,radio)
     tx._policy=lambda:replace(FAST,retry_unconfirmed=True)
     def callback(index,result,error):
@@ -657,7 +659,7 @@ async def test_database_intent_failure_is_before_submission_not_uncertain(monkey
 
 
 @pytest.mark.asyncio
-async def test_transient_missing_baseline_is_retried_before_submission():
+async def test_missing_baseline_does_not_delay_or_retry_an_accepted_command():
     radio,commands=make_radio(counter='advances')
     original=commands.get_stats_packets
     calls=[0]
@@ -668,9 +670,10 @@ async def test_transient_missing_baseline_is_retried_before_submission():
         return await original()
     commands.get_stats_packets=transient
     result=await radio.send_text('warning',0)
-    assert result.outcome=='local_confirmed'
-    assert calls[0]==3
-    assert len(commands.calls)==1
+    assert result.outcome=='accepted' and calls[0]==1
+    radio._counter_retry_at=0  # Expire the diagnostic cooldown.
+    assert (await radio.send_text('changed warning',0)).outcome=='local_confirmed'
+    assert len(commands.calls)==2
 
 
 @pytest.mark.asyncio
@@ -695,7 +698,7 @@ async def test_dry_run_change_between_parts_stops_remaining_submission():
     from unittest.mock import patch
     with patch('app.transmit.asyncio.sleep',sleep):
         await asyncio.wait_for(tx._worker(),1)
-    assert outcomes==['unconfirmed','not_attempted']
+    assert outcomes==['accepted','not_attempted']
     assert len(commands.calls)==1
 
 

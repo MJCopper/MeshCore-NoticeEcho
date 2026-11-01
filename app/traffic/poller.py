@@ -1,6 +1,8 @@
 """Live Traffic NSW polling, history decisions, and MeshCore queueing."""
 from __future__ import annotations
 
+from ..transmission import NOTICE_COMPLETED
+
 from ..notice_selection import evaluate, values_for, saved_values_for
 
 import asyncio
@@ -243,7 +245,7 @@ class TrafficPoller:
                     continue
                 if not force and dry_run and latest_send["transmit_status"] == "dry-run":
                     continue
-            if not force and latest_send and latest_send["revision_hash"] == item.revision and latest_send["transmit_status"] in ("success", "repeat_confirmed", "unconfirmed"):
+            if not force and latest_send and latest_send["revision_hash"] == item.revision and latest_send["transmit_status"] in NOTICE_COMPLETED:
                 continue
             is_closing = closing(item, council)
             action = "ENDED" if is_closing else ("UPDATE" if self.db.latest_successful_broadcast("traffic", item.item_id)

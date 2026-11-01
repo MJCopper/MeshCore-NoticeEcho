@@ -193,7 +193,7 @@ async def test_partial_delivery_resumes_original_parts_after_upgrade(environment
     assert len(app.state.tx.sent)==1
     assert [p[0] for p in app.state.tx.sent[0]]==[old[1]]
     record=rows(db,'SELECT * FROM service_history ORDER BY id DESC LIMIT 1')[0]
-    assert record['transmitted_text']==' || '.join(old) and record['transmit_status']=='success'
+    assert record['transmitted_text']==' || '.join(old) and record['transmit_status']=='accepted'
     app.state.tx.sent.clear();await process()
     assert not app.state.tx.sent
 

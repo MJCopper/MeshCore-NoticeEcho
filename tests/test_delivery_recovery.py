@@ -60,7 +60,7 @@ async def test_rfs_partial_failure_and_restart_resume_only_missing_part(tmp_path
     assert retried[0][0] == parts[1][0]
     callback(0, True, "")
     row = db.rfs_latest_broadcast("fire-1")
-    assert row["transmit_status"] == "success"
+    assert row["transmit_status"] == "accepted"
     assert db.rfs_get_incident("fire-1")["last_sent_hash"] == incident.revision
     db.close()
 

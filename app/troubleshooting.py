@@ -1,6 +1,8 @@
 """Source diagnostics and serialized, previewed replay jobs."""
 from __future__ import annotations
 
+from .transmission import NOTICE_COMPLETED, sql_states
+
 import asyncio
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
@@ -46,7 +48,7 @@ def current(db, source):
         # Expiry or feed disappearance alone must not fabricate a closure.
         where = "missing_polls<2 AND (active=1 OR (json_extract(normalized_data, '$.ended')=1 AND EXISTS " \
                 "(SELECT 1 FROM service_history h WHERE h.source='traffic' AND h.external_id=traffic_items.item_id " \
-                "AND h.transmit_status IN ('success','repeat_confirmed','unconfirmed'))))"
+                f"AND h.transmit_status IN {sql_states(NOTICE_COMPLETED)})))"
     return rows(db, f'SELECT * FROM {table} WHERE {where}')
 
 

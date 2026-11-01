@@ -36,11 +36,11 @@
 
   <div class="panel">
     <h3>Transmission verification</h3>
-    <p class="hint">NoticeEcho checks for local radio transmission activity and can also recognise your message being repeated by another node. These checks do not confirm delivery to recipients. Missing confirmation does not necessarily mean the message failed.</p>
+    <p class="hint">NoticeEcho records companion acceptance separately from local TX activity and exact heard repeats. These checks do not confirm delivery to recipients. Missing confirmation does not necessarily mean the message failed.</p>
     <fieldset class="transmission-group">
       <legend>Optional retry</legend>
-      <label class="chk" for="retry-unconfirmed"><input id="retry-unconfirmed" type="checkbox" name="meshcore_retry_unconfirmed" value="1" {% if s.get('meshcore_retry_unconfirmed', false) %}checked{% endif %} aria-describedby="retry-unconfirmed-help"> Retry once when transmission cannot be verified</label>
-      <p id="retry-unconfirmed-help" class="hint">Off by default. Allows one extra send of a message part when neither local transmission activity nor a matching heard repeat verifies the first attempt. The message may already have arrived, so retrying can produce a duplicate. Local transmission evidence is enough to prevent this retry, even if no repeat is heard. Remaining parts continue when verification is unavailable.</p>
+      <label class="chk" for="retry-unconfirmed"><input id="retry-unconfirmed" type="checkbox" name="meshcore_retry_unconfirmed" value="1" {% if s.get('meshcore_retry_unconfirmed', false) %}checked{% endif %} aria-describedby="retry-unconfirmed-help"> Retry once when the send command outcome is unknown</label>
+      <p id="retry-unconfirmed-help" class="hint">Off by default. Allows one extra attempt only when the send command response is unknown and no stronger evidence resolves it. A command accepted by the companion is never retried because counters or repeats are missing. Retries preserve the original packet identity; if that identity cannot be reproduced, the retry is suppressed. Remaining parts continue when RF evidence is unavailable.</p>
       <p class="hint">This option controls retries of uncertain transmissions. Recovery from connection failures and certain rejected sends is handled separately.</p>
     </fieldset>
     <fieldset class="transmission-group">
@@ -52,13 +52,13 @@
       <summary>Advanced verification settings</summary>
       <fieldset class="transmission-group">
         <legend>Verification timing</legend>
-        <label for="confirmation-wait">Initial verification wait (seconds)</label>
+        <label for="confirmation-wait">Additional evidence observation window (seconds)</label>
         <input id="confirmation-wait" type="number" name="meshcore_confirmation_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_confirmation_seconds', 5) }}" aria-describedby="confirmation-wait-help">
-        <p id="confirmation-wait-help" class="hint">Default: 5 seconds per message part, starting after the send command returns. Stops early when local transmission activity or a matching repeat is detected. Command preparation and response time are additional. Applies even when heard-repeat evidence is off.</p>
+        <p id="confirmation-wait-help" class="hint">Default: at most 5 seconds per part after the command response. Acceptance is recorded immediately and is not downgraded when evidence is unavailable. Ends early when evidence is obtained or no useful checks remain. Statistics reads have a separate 2-second limit and are diagnostic; command preparation and response time are additional.</p>
         <div class="transmission-dependent">
           <label for="retry-delay">Additional wait before optional retry (seconds)</label>
           <input id="retry-delay" type="number" name="meshcore_retry_delay_seconds" min="1" max="30" step="0.5" value="{{ s.get('meshcore_retry_delay_seconds', 5) }}" aria-describedby="retry-delay-help">
-          <p id="retry-delay-help" class="hint">Default: 5 seconds after the initial verification wait. Applies only when the optional retry is on. Local transmission evidence or a matching repeat arriving during this wait cancels the retry.</p>
+          <p id="retry-delay-help" class="hint">Default: 5 seconds after initial observation, only for an unknown command outcome when optional retry is enabled. Local TX activity or an exact repeat cancels the retry. Companion acceptance always prevents it.</p>
         </div>
         <div class="transmission-dependent">
           <label for="late-repeat-seconds">Late-repeat observation window (seconds)</label>

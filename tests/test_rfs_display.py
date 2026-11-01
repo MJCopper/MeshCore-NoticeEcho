@@ -76,8 +76,8 @@ def add_notice(db, status='dry-run', **metadata):
                            metadata=dict(level='Not Applicable', kind='Haystack fire', status='Under control') | metadata)
 
 
-@pytest.mark.parametrize('status,label', [('dry-run', 'dry-run'), ('success', 'Completed — locally confirmed'),
-                                         ('unconfirmed', 'Completed — some parts unconfirmed'), ('failed', 'Incomplete — failed')])
+@pytest.mark.parametrize('status,label', [('dry-run', 'dry-run'), ('success', 'Completed — legacy success (RF evidence not recorded)'),
+                                         ('unconfirmed', 'Completed — some command outcomes unknown'), ('failed', 'Incomplete — failed')])
 def test_history_pages_and_partials_separate_incident_from_delivery(display_app, status, label):
     app, client = display_app
     add_notice(app.state.db, status)

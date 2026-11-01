@@ -3,6 +3,21 @@ from datetime import datetime, timezone
 import re
 
 
+def delivery_label(status, parts, labels):
+    """Keep historical generic success distinct from recorded RF evidence."""
+    if status == 'success':
+        def recorded(part):
+            if part.get('status') == 'repeat_confirmed':
+                return True
+            if part.get('evidence_version', 0) >= 2 and part.get('provenance') == 'observed':
+                return True
+            before, after = part.get('counter_before'), part.get('counter_after')
+            return isinstance(before, int) and isinstance(after, int) and after > before and not part.get('counter_reset')
+        if not parts or not all(recorded(part) for part in parts):
+            return 'Completed — legacy success (RF evidence not recorded)'
+    return labels.get(status, status)
+
+
 def rfs_notice_display(title, metadata=None):
     """Describe saved RFS records for the web without changing provider/TX data."""
     metadata = metadata if isinstance(metadata, dict) else {}

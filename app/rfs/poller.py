@@ -1,6 +1,8 @@
 """Independent NSW RFS poller, council filter, history and alert queueing."""
 from __future__ import annotations
 
+from ..transmission import NOTICE_COMPLETED
+
 from ..notice_selection import evaluate, values_for
 
 import asyncio
@@ -155,7 +157,7 @@ class RFSPoller:
                 continue
             if latest and latest["revision_hash"] == incident.revision and latest["transmit_status"] == "dry-run" and dry_run and not force:
                 continue
-            if not force and latest and latest["revision_hash"] == incident.revision and latest["transmit_status"] in ("success", "repeat_confirmed", "unconfirmed"):
+            if not force and latest and latest["revision_hash"] == incident.revision and latest["transmit_status"] in NOTICE_COMPLETED:
                 continue
             action = "CLOSED" if closing else "UPDATE" if previous and previous["last_sent_hash"] else "NEW"
             try:

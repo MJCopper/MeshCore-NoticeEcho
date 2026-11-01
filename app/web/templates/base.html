@@ -192,6 +192,7 @@
     .pill.filtered,.pill.duplicate{background:rgba(120,132,156,.15);color:var(--subtle-text);}
     .pill.cancelled{background:rgba(245,165,36,.16);color:var(--warn-text);}
     .pill.queued{background:rgba(245,165,36,.16);color:var(--warn-text);}
+    .pill.accepted{background:rgba(120,132,156,.15);color:var(--subtle-text);}
     .pill.success{background:rgba(35,194,107,.14);color:var(--good-text);}
     .pill.failed{background:rgba(239,75,75,.14);color:var(--bad-text);}
     .pill.dry-run{background:rgba(120,132,156,.15);color:var(--subtle-text);}
@@ -204,7 +205,7 @@
     /* history record cards */
     .rec{padding:15px 20px;border-bottom:1px solid var(--line);}
     .rec:last-child{border-bottom:none;}
-    .rec-head{display:flex;justify-content:space-between;align-items:center;gap:12px;}
+    .rec-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
     .rec-time{font-size:12.5px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;}
     .rec-event{font-weight:650;font-size:15.5px;margin-top:6px;overflow-wrap:anywhere;}
     .console-terminal{box-sizing:border-box;height:calc(16 * 1.5em + 26px);max-width:100%;

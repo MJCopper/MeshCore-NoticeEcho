@@ -139,7 +139,7 @@ async def test_long_notice_restart_resumes_only_unconfirmed_parts(tmp_path, monk
     assert resumed == parts[5:]
     for index in range(len(resumed)):
         callback(index, True, "")
-    assert db.latest_service_history("traffic", event.item_id)["transmit_status"] == "success"
+    assert db.latest_service_history("traffic", event.item_id)["transmit_status"] == "accepted"
     db.close()
 
 

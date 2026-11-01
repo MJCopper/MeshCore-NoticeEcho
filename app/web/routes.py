@@ -1,6 +1,8 @@
 """Web UI routes (server-rendered templates + htmx partials)."""
 from __future__ import annotations
 
+from ..transmission import NOTICE_COMPLETED
+
 import json
 import re
 import sys
@@ -15,7 +17,7 @@ from .. import __version__
 from ..config import MAX_PAYLOAD_BYTES, MIN_POLL_MINUTES, polling_seconds, safety_warning_text as valid_warning_text
 from ..rfs.councils import COUNCILS
 from ..meshcore_discovery import list_usb_serial_devices
-from ..presentation import freshness, listing_status, rfs_notice_display
+from ..presentation import freshness, listing_status, rfs_notice_display, delivery_label
 from ..catalogue import View
 
 
@@ -84,9 +86,10 @@ DISP_LABELS = {
 TX_STATUS_LABELS = {
     "queued": "queued",
     "deferred": "waiting for send queue",
-    "success": "Completed — locally confirmed",
-    "repeat_confirmed": "Completed — repeat confirmed",
-    "unconfirmed": "Completed — some parts unconfirmed",
+    "success": "Completed — local TX activity observed",
+    "repeat_confirmed": "Completed — repeat heard",
+    "accepted": "Completed — accepted by companion",
+    "unconfirmed": "Completed — some command outcomes unknown",
     "failed": "Incomplete — failed",
     "dry-run": "dry-run",
     "interrupted": "interrupted",
@@ -199,7 +202,7 @@ def _dash_ctx(request) -> dict:
     for r in sorted(candidates, key=lambda row: (row.get("transmitted_at") or row["ts"],
                                                  row["id"] if "id" in row.keys() else 0),
                     reverse=True):
-        if r["transmit_status"] not in ("success", "repeat_confirmed", "unconfirmed"):
+        if r["transmit_status"] not in NOTICE_COMPLETED:
             continue
         source = r["source"] if "source" in r.keys() else "bom"
         external_id = r["external_id"] if "external_id" in r.keys() else r.get("alert_id", "")
@@ -218,6 +221,7 @@ def _dash_ctx(request) -> dict:
         "rfs_display": rfs_notice_display(r["title"], r.get("metadata")) if r.get("source") == "rfs" else None,
         "area": r["area"], "disposition": r["disposition"],
         "transmit_status": r["transmit_status"], "detail": r["detail"],
+        "delivery_label": delivery_label(r["transmit_status"], r.get('delivery_parts', []), TX_STATUS_LABELS),
         "text": r["transmitted_text"],
         "when": fmt_local(r.get("transmitted_at") or r["ts"], tz),
     } for r in recent_rows]
@@ -403,6 +407,7 @@ def _history_context(request, source="", disposition="", transmit_status="",
     rows = db.query_service_history(**kwargs)
     for row in rows:
         row["source_label"] = history_source_label(row["source"])
+        row['delivery_label'] = delivery_label(row['transmit_status'], row.get('delivery_parts', []), TX_STATUS_LABELS)
         if row["source"] == "rfs":
             row["rfs_display"] = rfs_notice_display(row["title"], row.get("metadata"))
     return dict(rows=rows, superseded_ids=_superseded_history_ids(rows),
@@ -411,7 +416,7 @@ def _history_context(request, source="", disposition="", transmit_status="",
                 date_from=date_from, date_to=date_to, facet=facet,
                 records="all" if records == "all" else "prepared",
                 dispositions=["sent", "filtered", "update", "cancelled"],
-                transmit_statuses=["queued", "deferred", "success", "repeat_confirmed", "unconfirmed", "failed", "interrupted", "dry-run"])
+                transmit_statuses=["queued", "deferred", "success", "repeat_confirmed", "accepted", "unconfirmed", "failed", "interrupted", "dry-run"])
 
 
 @router.get("/history", response_class=HTMLResponse)

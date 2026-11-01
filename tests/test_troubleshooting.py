@@ -121,7 +121,7 @@ async def test_preview_is_isolated_and_resend_queues_complete_eligible_notice(en
     job=app.state.troubleshooting.start(preview['token'])
     await app.state.troubleshooting.task
     assert job['status']=='completed'
-    assert job['results']['success']==1
+    assert job['results']['accepted']==1
     assert len(app.state.tx.sent)==1
 
 
@@ -226,7 +226,7 @@ async def test_deferred_forced_notice_is_retried_without_resending_confirmed_not
     app.state.troubleshooting.start(preview['token'])
     await asyncio.wait_for(app.state.troubleshooting.task,5)
     assert len(app.state.tx.sent)==2
-    assert app.state.troubleshooting.job['results']['success']==2
+    assert app.state.troubleshooting.job['results']['accepted']==2
 
 
 @pytest.mark.asyncio
@@ -404,7 +404,7 @@ async def test_reprocess_tracks_a_reused_deferred_history_row(environment):
     for index,_ in enumerate(parts):
         callback(index,True,'')
     await asyncio.wait_for(app.state.troubleshooting.task,4)
-    assert app.state.troubleshooting.job['results']['success']==1
+    assert app.state.troubleshooting.job['results']['accepted']==1
 
 
 @pytest.mark.asyncio

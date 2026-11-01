@@ -33,6 +33,14 @@ async def status(request: Request):
     return diagnostics(request.app)
 
 
+@router.post('/radio/statistics')
+async def local_statistics(request: Request):
+    try:
+        return await request.app.state.tx.check_local_statistics()
+    except RuntimeError as exc:
+        raise HTTPException(409 if 'busy' in str(exc).lower() else 503, str(exc))
+
+
 @router.post('/preview')
 async def preview(request: Request, body: ReplayRequest):
     try:

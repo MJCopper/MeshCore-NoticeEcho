@@ -1,6 +1,8 @@
 """BOM polling background task."""
 from __future__ import annotations
 
+from .transmission import NOTICE_COMPLETED
+
 from .notice_selection import evaluate, values_for
 
 import asyncio
@@ -354,7 +356,7 @@ class BomPoller:
                     return False
             if episode_record and episode_record["state"] in ("queued", "submitting"):
                 return False
-            if episode_record and not force and (eligible or terminal) and episode_record["state"] in ("success", "unconfirmed", "repeat_confirmed", "dry-run"):
+            if episode_record and not force and (eligible or terminal) and episode_record["state"] in NOTICE_COMPLETED | {"dry-run"}:
                 return False
             if not episode:
                 decision = Decision("filtered", False, "BOM warning has expired" if expired else "No established BOM episode; poll for current episode evidence")
@@ -441,7 +443,7 @@ class BomPoller:
         if (decision.transmit and latest is not None
                 and latest["revision_hash"] == revision_hash
                 and (latest["transmit_status"] == "queued" or
-                     (not force and not dry_run and latest["transmit_status"] in ("success", "unconfirmed", "repeat_confirmed")))):
+                     (not force and not dry_run and latest["transmit_status"] in NOTICE_COMPLETED))):
             return False
         retry_existing = ((not force or (latest is not None and latest["transmit_status"] == "deferred")) and decision.transmit and not dry_run and latest is not None
                           and latest["revision_hash"] == revision_hash

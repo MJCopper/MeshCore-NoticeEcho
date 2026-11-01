@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .notice_selection import evaluate as notice_evaluate, values_for as notice_values
 
-from .transmission import TxResult, CONFIRMED, COMPLETED
+from .transmission import TxResult, CONFIRMED, COMPLETED, NOTICE_COMPLETED, aggregate_parts, evidence_rank, sql_states
 
 import json
 import sqlite3
@@ -219,6 +219,7 @@ class Database:
         self._seed_settings()
         self._migrate_notice_groups()
         self._upgrade_catalogue()
+        bom_episodes.upgrade_delivery_trigger(self)
         self.bom_episodes = bom_episodes.Episodes(self)
         self.bom_episodes.bootstrap()
 
@@ -333,12 +334,12 @@ class Database:
                         part["status"] = "not_attempted"
                         changed = True
                     if part.get("status") == "submitting" or (part.get("status") == "failed" and "transmission cannot be confirmed" in part.get("error", "")):
-                        part.update(status="unconfirmed", outcome="unconfirmed", error="Submission interrupted or confirmation unavailable; message may have transmitted")
+                        part.update(status="accepted" if part.get("accepted") else "unconfirmed", outcome="accepted" if part.get("accepted") else "unconfirmed", error="Submission interrupted; preserved recorded command evidence")
                         changed = True
                 if changed:
                     self._conn.execute("UPDATE service_history SET delivery_parts = ? WHERE id = ?", (json.dumps(parts), row["id"]))
                 if parts and all(part.get("status") in COMPLETED for part in parts):
-                    status = "unconfirmed" if any(part.get("status") == "unconfirmed" for part in parts) else "repeat_confirmed" if all(part.get("status") == "repeat_confirmed" for part in parts) else "success"
+                    status = aggregate_parts(parts)
                     self._conn.execute("UPDATE service_history SET transmit_status = ?, transmitted_at = CASE WHEN ? IN ('success','repeat_confirmed') AND transmitted_at = '' THEN ts ELSE transmitted_at END WHERE id = ?", (status, status, row["id"]))
             # Retire only old BOM history with provenance proving another state.
             non_nsw_bom = (
@@ -623,10 +624,8 @@ class Database:
             if transmit_status == "success":
                 row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id = ?", (row_id,)).fetchone()
                 parts = json.loads(row["delivery_parts"] or "[]") if row else []
-                if any(part.get("status") == "unconfirmed" for part in parts):
-                    transmit_status = "unconfirmed"
-                elif parts and all(part.get("status") == "repeat_confirmed" for part in parts):
-                    transmit_status = "repeat_confirmed"
+                if parts:
+                    transmit_status = aggregate_parts(parts)
             transmitted_at = _now() if transmit_status in ("success", "repeat_confirmed") else None
             if detail is None:
                 self._conn.execute(
@@ -658,17 +657,19 @@ class Database:
             while len(parts) < total:
                 parts.append({"status": "pending"})
             previous = parts[index]
-            if isinstance(ok, TxResult):
-                record = ok.as_record()
-                # A late repeat may have confirmed an earlier attempt already.
-                if previous.get("status") in CONFIRMED and (not ok.confirmed or previous.get("status") == "repeat_confirmed"):
-                    record["outcome"] = previous["status"]
-                if previous.get("may_have_transmitted") and record["outcome"] not in COMPLETED:
-                    record["outcome"] = "unconfirmed"
-                parts[index] = previous | record | {"status": record["outcome"], "error": error or ok.detail,
-                                                    "may_have_transmitted": previous.get("may_have_transmitted", False) or record["outcome"] in COMPLETED}
-            else:
-                parts[index] = previous | {"status": "transmitted" if ok else ("not_attempted" if error.startswith("Not attempted") else "failed"), "error": error}
+            ok = TxResult.legacy(ok, error)
+            record = ok.as_record()
+            previous_outcome = max((previous.get('status', ''), previous.get('outcome', '')), key=evidence_rank)
+            if evidence_rank(previous_outcome) > evidence_rank(record['outcome']):
+                record = record | {key: value for key, value in previous.items()
+                                   if key in TxResult.__dataclass_fields__}
+                record['outcome'] = previous_outcome
+                error = previous.get('error', '')
+            if previous.get('may_have_transmitted') and record['outcome'] not in COMPLETED:
+                record['outcome'] = 'accepted' if previous.get('accepted') else 'unconfirmed'
+            parts[index] = previous | record | dict(status=record['outcome'], error=error or record.get('detail', ''),
+                accepted=previous.get('accepted', False) or record.get('accepted', False),
+                may_have_transmitted=previous.get('may_have_transmitted', False) or record['outcome'] in COMPLETED)
             self._conn.execute(
                 "UPDATE service_history SET delivery_parts = ? WHERE id = ?",
                 (json.dumps(parts), row_id),
@@ -694,7 +695,7 @@ class Database:
         with self._lock:
             return self._conn.execute(
                 "SELECT * FROM service_history WHERE source = ? AND external_id = ? "
-                "AND transmit_status IN ('success', 'repeat_confirmed', 'unconfirmed') ORDER BY id DESC LIMIT 1",
+                f"AND transmit_status IN {sql_states(NOTICE_COMPLETED)} ORDER BY id DESC LIMIT 1",
                 (source, external_id),
             ).fetchone()
 
@@ -734,7 +735,7 @@ class Database:
             clauses.append("disposition = ?")
             params.append(disposition)
         if transmit_status == "completed":
-            clauses.append("transmit_status IN ('success','repeat_confirmed','unconfirmed')")
+            clauses.append(f"transmit_status IN {sql_states(NOTICE_COMPLETED)}")
         elif transmit_status:
             clauses.append("transmit_status = ?")
             params.append(transmit_status)
@@ -878,7 +879,7 @@ class Database:
                 "SELECT * FROM service_history WHERE source = 'traffic' "
                 "AND external_id IN (" + ",".join("?" for _ in ids) + ") "
                 "AND revision_hash = ? AND transmit_status IN "
-                "('queued', 'success', 'repeat_confirmed', 'unconfirmed', 'dry-run') "
+                f"{sql_states(NOTICE_COMPLETED | {'queued','dry-run'})} "
                 "ORDER BY id DESC LIMIT 1", (*ids, revision),
             ).fetchone()
 
@@ -1150,7 +1151,7 @@ class Database:
     def tracking_transmissions(self):
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat(timespec="seconds")
         with self._lock:
-            return self._conn.execute("SELECT * FROM transmit_log WHERE (ts>=? OR json_extract(evidence, '$.repeat_expires_at') > ?) AND outcome IN ('unconfirmed','local_confirmed','repeat_confirmed') ORDER BY id DESC LIMIT 256", (cutoff, datetime.now(timezone.utc).timestamp())).fetchall()
+            return self._conn.execute(f"SELECT * FROM transmit_log WHERE (ts>=? OR json_extract(evidence, '$.repeat_expires_at') > ?) AND outcome IN {sql_states(COMPLETED)} ORDER BY id DESC LIMIT 256", (cutoff, datetime.now(timezone.utc).timestamp())).fetchall()
 
     def delivery_policy(self, context, fallback):
         if not context:
@@ -1200,7 +1201,7 @@ class Database:
             self.record_delivery_part(row["service_history_id"], row["part_index"], row["part_total"], result, result.detail)
             with self._lock:
                 current = self._conn.execute("SELECT delivery_parts, transmit_status FROM service_history WHERE id=?", (row["service_history_id"],)).fetchone()
-            if current and current["transmit_status"] in ("success", "repeat_confirmed", "unconfirmed", "interrupted"):
+            if current and current["transmit_status"] in NOTICE_COMPLETED | {"interrupted"}:
                 parts = json.loads(current["delivery_parts"] or "[]")
                 if parts and all(part.get("status") in COMPLETED for part in parts):
                     self.update_service_history(row["service_history_id"], "success")

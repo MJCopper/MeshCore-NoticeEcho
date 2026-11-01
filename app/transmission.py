@@ -9,10 +9,33 @@ import math
 import time
 
 CONFIRMED = {"local_confirmed", "repeat_confirmed", "transmitted"}
-COMPLETED = CONFIRMED | {"unconfirmed"}
+COMPLETED = CONFIRMED | {"accepted", "unconfirmed"}
+NOTICE_COMPLETED = frozenset({'success', 'repeat_confirmed', 'accepted', 'unconfirmed'})
+
+
+def sql_states(states):
+    """SQL literals for trusted shared outcome constants, never user input."""
+    return '(' + ','.join(repr(value) for value in sorted(states)) + ')'
+
+
+def aggregate_parts(parts):
+    statuses = {part.get('status') for part in parts}
+    if statuses - COMPLETED:
+        return 'failed' if statuses & {'failed', 'rejected'} else 'interrupted' if 'interrupted' in statuses else 'queued'
+    if 'unconfirmed' in statuses:
+        return 'unconfirmed'
+    if 'accepted' in statuses:
+        return 'accepted'
+    return 'repeat_confirmed' if statuses == {'repeat_confirmed'} else 'success'
+
+
+def evidence_rank(outcome):
+    return {'repeat_confirmed': 4, 'local_confirmed': 3, 'transmitted': 3,
+            'accepted': 2, 'unconfirmed': 1}.get(outcome, 0)
 LABELS = {
-    "local_confirmed": "Locally confirmed", "repeat_confirmed": "Repeat confirmed",
-    "unconfirmed": "Unconfirmed", "rejected": "Rejected", "not_attempted": "Not attempted",
+    "accepted": "Accepted by companion",
+    "local_confirmed": "Local TX activity observed", "repeat_confirmed": "Repeat heard",
+    "unconfirmed": "Command outcome unknown", "rejected": "Rejected", "not_attempted": "Not attempted",
     "submitting": "Submission in progress", "pending": "Pending", "transmitted": "Locally confirmed (legacy)",
     "failed": "Failed", "interrupted": "Interrupted",
 }
@@ -53,6 +76,17 @@ class TxResult:
     counter_before: int | None = None
     counter_after: int | None = None
     counter_reset: bool = False
+    counter_status: str = 'not_requested'
+    counter_error: str = ''
+    counter_samples: list = field(default_factory=list)
+    counter_reads_used: int = 0
+    counter_session: str = ''
+    counter_send_sequence: int = 0
+    evidence_version: int = 2
+    provenance: str = 'observed'
+    logical_id: str = ''
+    destination_id: str = ''
+    repeat_scope: str = 'packet'
     packet_id: str = ""
     repeats: int = 0
     timestamp: int | None = None
@@ -61,6 +95,12 @@ class TxResult:
     listeners: list = field(default_factory=list, repr=False)
     repeat_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
+    def __post_init__(self):
+        if self.outcome == 'accepted':
+            self.accepted = self.submitted = True
+        elif self.outcome == 'unconfirmed' and self.accepted:
+            self.outcome = 'accepted'
+
     def __bool__(self):
         # True means the multipart queue may continue, not proven remote delivery.
         return self.outcome in COMPLETED
@@ -68,6 +108,14 @@ class TxResult:
     @property
     def confirmed(self):
         return self.outcome in CONFIRMED
+
+    @property
+    def retry_eligible(self):
+        return self.outcome == 'unconfirmed' and self.submitted and not self.accepted
+
+    def notify(self):
+        for callback in tuple(self.listeners):
+            callback(self)
 
     @property
     def label(self):
@@ -81,12 +129,12 @@ class TxResult:
         self.repeats += 1
         self.outcome = "repeat_confirmed"
         self.repeat_event.set()
-        for callback in tuple(self.listeners):
-            callback(self)
+        self.notify()
 
     @classmethod
     def legacy(cls, value, detail=""):
-        return value if isinstance(value, cls) else cls("local_confirmed" if value else "rejected", detail)
+        return value if isinstance(value, cls) else cls("accepted" if value else "rejected", detail,
+                                                        submitted=bool(value), accepted=bool(value), provenance='legacy-adapter')
 
 
 def channel_payload(secret: bytes, sender: str, text: str, timestamp: int) -> bytes:
@@ -178,3 +226,10 @@ class RepeatTracker:
         matches = [result for _, expected, result in self.pending if expected == digest and result.submitted]
         if len(matches) == 1:
             matches[0].hear_repeat()
+        elif matches and matches[0].logical_id and all(result.logical_id == matches[0].logical_id for result in matches):
+            count = max(result.repeats for result in matches) + 1
+            for result in matches:
+                result.repeats = count
+                result.outcome = 'repeat_confirmed'
+                result.repeat_event.set()
+                result.notify()

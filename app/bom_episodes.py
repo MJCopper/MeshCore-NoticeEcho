@@ -9,8 +9,9 @@ import re
 from urllib.parse import urlsplit
 
 from .catalogue import epoch
+from .transmission import NOTICE_COMPLETED, COMPLETED, sql_states
 
-SCHEMA = """
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS bom_products (
  product_key TEXT PRIMARY KEY, prefix TEXT UNIQUE NOT NULL, next_sequence INTEGER NOT NULL DEFAULT 1
 );
@@ -38,9 +39,9 @@ CREATE TRIGGER IF NOT EXISTS bom_announcement_delivery AFTER UPDATE OF transmit_
 BEGIN
  UPDATE bom_announcements SET state=COALESCE(NEW.transmit_status,'unknown'),
  introduced=CASE WHEN mode='dry-run' AND NEW.transmit_status='dry-run' THEN 1
- WHEN NEW.transmit_status IN ('success','unconfirmed','repeat_confirmed') THEN 1
+ WHEN NEW.transmit_status IN {sql_states(NOTICE_COMPLETED)} THEN 1
  WHEN EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(NEW.delivery_parts) THEN NEW.delivery_parts ELSE '[]' END) p
- WHERE json_extract(p.value,'$.status') IN ('submitting','transmitted','local_confirmed','repeat_confirmed','unconfirmed')
+ WHERE json_extract(p.value,'$.status') IN {sql_states(COMPLETED | {'submitting'})}
  OR json_extract(p.value,'$.may_have_transmitted')=1) THEN 1 ELSE 0 END
  WHERE history_id=NEW.id AND provenance!='legacy-unknown';
 END;
@@ -237,7 +238,7 @@ class Episodes:
                                            "WHERE a.episode_id=? AND a.mode=? AND a.destination=? AND "
                                            "substr(a.revision_hash,1,instr(a.revision_hash||':',':')-1)=? AND "
                                            "(a.introduced=1 OR a.provenance='legacy-unknown') "
-                                           "AND a.state IN ('queued','submitting','success','unconfirmed','repeat_confirmed','dry-run') ORDER BY a.id DESC LIMIT 1",
+                                           f"AND a.state IN {sql_states(NOTICE_COMPLETED | {'queued','submitting','dry-run'})} ORDER BY a.id DESC LIMIT 1",
                                            (episode['id'], mode, audience, revision.partition(':')[0])).fetchone()
             if row is None and allow_content_match and material_hash:
                 # Compare the last introduced/in-flight content, not every old
@@ -271,8 +272,8 @@ class Episodes:
             parts = json.loads(row['delivery_parts'] or '[]')
         except ValueError:
             parts = []
-        introduced = state in ('dry-run', 'success', 'repeat_confirmed', 'unconfirmed') or any(
-            part.get('status') in ('transmitted', 'local_confirmed', 'repeat_confirmed', 'unconfirmed', 'submitting') or part.get('may_have_transmitted') for part in parts)
+        introduced = state in NOTICE_COMPLETED | {'dry-run'} or any(
+            part.get('status') in COMPLETED | {'submitting'} or part.get('may_have_transmitted') for part in parts)
         linked = conn.execute('SELECT * FROM bom_announcements WHERE history_id=?', (history_id,)).fetchone()
         if linked:
             if (linked['episode_id'], linked['mode'], linked['destination']) != (episode['id'], mode, audience):
@@ -313,7 +314,7 @@ class Episodes:
                 if not episode:
                     continue
                 history = conn.execute("SELECT * FROM service_history WHERE source='bom' AND external_id=? AND transmitted_text!='' ORDER BY id DESC LIMIT 1", (alert.alert_id,)).fetchone()
-                if history and history['transmit_status'] in ('dry-run','success','repeat_confirmed','unconfirmed','queued','interrupted','failed','deferred'):
+                if history and history['transmit_status'] in NOTICE_COMPLETED | {'dry-run','queued','interrupted','failed','deferred'}:
                     mode = 'dry-run' if history['transmit_status'] == 'dry-run' else 'live'
                     # Current provider content is not evidence of what an older
                     # History revision contained. Only attach a matching hash.
@@ -321,3 +322,13 @@ class Episodes:
                     conn.execute("INSERT INTO bom_announcements(episode_id,mode,destination,revision_hash,material_hash,action,operation,history_id,state,created,provenance) VALUES (?,?,?,?,?,?,'legacy-anchor',?,?,?,'legacy-unknown')",
                                  (episode['id'], mode, audience, history['revision_hash'], material, 'UNKNOWN', history['id'], history['transmit_status'], history['ts']))
             conn.execute("INSERT INTO history_migrations VALUES ('bom_episodes_v1')")
+
+
+def upgrade_delivery_trigger(db):
+    """Atomically refresh the old trigger once, including on concurrent startup."""
+    with db._lock, db._conn:
+        db._conn.execute('BEGIN IMMEDIATE')
+        if not db._conn.execute("SELECT 1 FROM history_migrations WHERE name='delivery_evidence_v2'").fetchone():
+            db._conn.execute('DROP TRIGGER IF EXISTS bom_announcement_delivery')
+            db._conn.execute(SCHEMA[SCHEMA.index('CREATE TRIGGER'):].strip())
+            db._conn.execute("INSERT INTO history_migrations VALUES ('delivery_evidence_v2')")

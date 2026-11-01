@@ -212,7 +212,7 @@ async def test_missing_item_is_recorded_without_claiming_road_reopened():
     first_count = len(tx.sent)
     client.items = []
     await poller.poll_once()
-    assert db.latest_service_history("traffic", "incident:1")["transmit_status"] == "success"
+    assert db.latest_service_history("traffic", "incident:1")["transmit_status"] == "accepted"
     await poller.poll_once()
     row = db.latest_service_history("traffic", "incident:1")
     assert row["disposition"] == "absent-from-feed"

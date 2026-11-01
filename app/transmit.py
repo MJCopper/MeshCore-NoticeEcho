@@ -74,6 +74,12 @@ class MeshCoreTransmitter(Transmitter):
         self.counter_capability = "unknown"
         self.counter_error = ""
         self.counter_checked_at = None
+        self._counter_retry_at = 0.0
+        self._counter_session_trusted = True
+        self._counter_session = secrets.token_hex(8)
+        self._counter_last_status = "not_requested"
+        self._counter_elapsed = 0.0
+        self._send_sequence = 0
         self.repeat_status = "not connected"
         self.last_result = None
         self._last_timestamp = 0
@@ -110,9 +116,15 @@ class MeshCoreTransmitter(Transmitter):
         self._sender_name = info.payload.get("name")
         if not isinstance(self._sender_name, str):
             raise RuntimeError("MeshCore sender name is unavailable")
-        self.counter_capability = "unknown"
-        self.counter_error = ""
+        self._reset_counter_session()
         self._subscribe_repeats()
+
+    def _reset_counter_session(self):
+        self.counter_capability = 'unknown'
+        self.counter_error = ''
+        self._counter_retry_at = 0.0
+        self._counter_session_trusted = True
+        self._counter_session = secrets.token_hex(8)
 
     def _subscribe_repeats(self):
         from meshcore import EventType
@@ -126,7 +138,7 @@ class MeshCoreTransmitter(Transmitter):
             self.repeat_status = "unavailable: %s" % exc
 
     async def _prepare_repeat(self, result, text, channel):
-        if not self.policy.repeat_detection or not self._subscriptions:
+        if not self.policy.repeat_detection and not self.policy.retry_unconfirmed:
             return
         try:
             from meshcore import EventType
@@ -148,16 +160,18 @@ class MeshCoreTransmitter(Transmitter):
                 raise ValueError("channel secret unavailable")
             payload = channel_payload(secret, self._sender_name, text, result.timestamp)
             # Listen throughout command preparation and confirmation, even with a short late window.
-            self.repeat_tracker.register(payload, result, 8 + self.policy.confirmation_seconds + self.policy.late_repeat_seconds)
+            result.packet_id = sha256(payload).hexdigest()
+            if self.policy.repeat_detection and self._subscriptions:
+                self.repeat_tracker.register(payload, result, 8 + self.policy.confirmation_seconds + self.policy.late_repeat_seconds)
             self.repeat_status = "listening; exact packet matching available"
         except Exception as exc:
             self.repeat_status = "unavailable for this send: %s" % (str(exc) or type(exc).__name__)
 
-    async def send_text(self, text: str, channel: int) -> TxResult:
+    async def send_text(self, text: str, channel: int, *, retry_of=None) -> TxResult:
         async with self._send_lock:
-            return await self._send_text(text, channel)
+            return await self._send_text(text, channel, retry_of=retry_of)
 
-    async def _send_text(self, text: str, channel: int) -> TxResult:
+    async def _send_text(self, text: str, channel: int, *, retry_of=None) -> TxResult:
         if self._mc is None:
             raise TxUnsent("link", "not connected before submission")
         size = len(text.encode("utf-8"))
@@ -168,20 +182,32 @@ class MeshCoreTransmitter(Transmitter):
         if "\x00" in text:
             raise TxUnsent("too_large", "message contains a NUL character")
         from meshcore import EventType
-        self._last_timestamp = max(int(time.time()), self._last_timestamp + 1)
-        result = TxResult("unconfirmed", timestamp=self._last_timestamp)
+        if retry_of is None:
+            self._last_timestamp = max(int(time.time()), self._last_timestamp + 1)
+        destination_id = sha256(json.dumps([self.conn, self.port, self.host, channel]).encode()).hexdigest()
+        result = TxResult("unconfirmed", timestamp=retry_of.timestamp if retry_of else self._last_timestamp,
+                          logical_id=retry_of.logical_id if retry_of else secrets.token_hex(16), destination_id=destination_id)
+        if retry_of is not None:
+            result.counter_reads_used = retry_of.counter_reads_used
         started = time.monotonic()
         self._channel_exists = None
         await self._prepare_repeat(result, text, channel)
-        # The SDK requests also consume the deadline; baseline preparation is bounded.
-        before = None
-        for _ in range(2):
-            before = await self._bounded_counter(0.75)
-            if before is not None or self.counter_capability == "unsupported":
-                break
+        parameters = inspect.signature(self._mc.commands.send_chan_msg).parameters
+        if retry_of is not None and (not retry_of.packet_id or result.packet_id != retry_of.packet_id
+                                      or destination_id != retry_of.destination_id or 'timestamp' not in parameters):
+            self.repeat_tracker.discard(result)
+            raise TxUnsent('identity_changed', 'Automatic retry suppressed: original packet identity cannot be reproduced')
+        before = await self._sample_counter(result, 2.0)
         result.counter_before = before
+        result.counter_session = self._counter_session
         if self.on_submission is not None:
-            self.on_submission(result)  # commit intent before any command bytes can be written
+            try:
+                self.on_submission(result)  # durable intent before command bytes
+            except BaseException:
+                self.repeat_tracker.discard(result)
+                raise
+        self._send_sequence += 1
+        result.counter_send_sequence = self._send_sequence
         result.submitted = True
         try:
             command = self._mc.commands.send_chan_msg
@@ -194,7 +220,7 @@ class MeshCoreTransmitter(Transmitter):
                 result.packet_id = ""
                 self.repeat_status = "unavailable: SDK does not support explicit send timestamps"
                 response = await asyncio.wait_for(command(channel, text), 6.0)
-            if response is not None and response.type == EventType.ERROR:
+            if response is not None and response.type == EventType.ERROR and self._counter_session_trusted and not ((response.payload or {}).get("reason") in ("timeout", "no_event_received") or ("error" in (response.payload or {}) and "error_code" not in (response.payload or {}))):
                 payload = response.payload or {}
                 if result.confirmed:
                     result.detail = "Exact heard repeat confirmed transmission despite contradictory command error: %s" % (payload.get("reason") or payload.get("error_code", "unknown"))
@@ -211,23 +237,24 @@ class MeshCoreTransmitter(Transmitter):
                 self.last_result = result
                 return result
             result.accepted = response is not None and response.type == getattr(EventType, "OK", "ok")
-            if not result.accepted:
+            if result.accepted:
+                if not result.confirmed:
+                    result.outcome = 'accepted'
+                result.notify()
+            else:
                 result.detail = "command response unavailable; message may have transmitted"
         except Exception as exc:
             result.detail = "command response interrupted; message may have transmitted: %s" % (str(exc) or type(exc).__name__)
         deadline = time.monotonic() + self.policy.confirmation_seconds
+        reads = 0
         while time.monotonic() < deadline and not result.confirmed:
-            if before is not None:
-                after = await self._bounded_counter(min(0.75, max(0.001, deadline - time.monotonic())))
-                result.counter_after = after
-                if after is not None and after > before:
-                    if not result.confirmed:
-                        result.outcome = "local_confirmed"
+            if before is not None and (reads == 0 or (reads == 1 and time.monotonic() >= deadline - min(2.0, self.policy.confirmation_seconds / 2))):
+                reads += 1
+                await self.refresh_confirmation(result, min(2.0, max(0.001, deadline - time.monotonic())))
+                if result.confirmed:
                     break
-                if after is not None and after < before:
-                    result.detail = "local TX counter reset; transmission cannot be confirmed locally"
-                    result.counter_reset = True
-                    before = None
+            if not self.policy.repeat_detection and (before is None or reads >= 2 or result.counter_reset):
+                break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -235,27 +262,71 @@ class MeshCoreTransmitter(Transmitter):
                 await asyncio.wait_for(result.repeat_event.wait(), min(0.3, remaining))
             except asyncio.TimeoutError:
                 pass
-        if not result.confirmed and not result.detail:
-            result.detail = ("local TX counter unavailable: " + (self.counter_error or "no baseline")
-                             if result.counter_before is None else "no local TX activity observed before confirmation timeout")
-        tracking = self.policy.late_repeat_seconds
-        if self.policy.retry_unconfirmed and not result.confirmed:
+        if result.outcome == 'accepted':
+            result.detail = ''
+        elif not result.confirmed and not result.detail:
+            result.detail = 'Send command outcome unknown; no additional transmission evidence observed'
+        tracking = self.policy.late_repeat_seconds if self.policy.repeat_detection else 0
+        if self.policy.retry_unconfirmed and result.retry_eligible and self.policy.repeat_detection:
             tracking = max(tracking, self.policy.retry_delay_seconds + 8 + self.policy.confirmation_seconds)
         self.repeat_tracker.extend(result, tracking)
         result.elapsed_seconds = time.monotonic() - started
         self.last_result = result
         return result
 
-    async def _bounded_counter(self, timeout):
-        if self.counter_capability == "unsupported":
+    async def _sample_counter(self, result, timeout):
+        if result.counter_reads_used >= 3:
+            result.counter_status = 'budget_exhausted'
+            result.counter_error = 'Statistics read limit reached for this message part'
             return None
+        result.counter_reads_used += 1
+        session = self._counter_session
+        value = await self._bounded_counter(timeout)
+        status = self._counter_last_status
+        if session != self._counter_session:
+            value = None
+            status = 'session_changed'
+            self.counter_error = 'Radio connection changed during statistics read; sample discarded'
+        result.counter_status = status
+        result.counter_error = self.counter_error
+        result.counter_samples.append(dict(value=value, status=status, error=self.counter_error,
+                                           checked_at=time.time(), elapsed_seconds=self._counter_elapsed))
+        return value if self._counter_session_trusted else None
+
+    async def _bounded_counter(self, timeout, *, force=False):
+        started = time.monotonic()
+        self._counter_elapsed = 0.0
+        if not force:
+            if not self._counter_session_trusted:
+                self._counter_last_status = 'session_untrusted'
+                self.counter_error = 'Previous statistics request timed out; reconnect before using counter evidence'
+                return None
+            if self.counter_capability == 'unsupported':
+                self._counter_last_status = 'unsupported'
+                return None
+            if started < self._counter_retry_at:
+                self._counter_last_status = 'cooldown'
+                return None
         try:
-            return await asyncio.wait_for(self._flood_tx(), timeout)
+            value = await asyncio.wait_for(self._flood_tx(), min(2.0, timeout))
+            if value is None:
+                self._counter_last_status = ('unsupported' if self.counter_capability == 'unsupported'
+                                             else 'missing_field' if 'field missing' in self.counter_error else 'invalid_response')
+                self._counter_retry_at = time.monotonic() + 30
+            else:
+                self.counter_capability = self._counter_last_status = 'available'
+                self.counter_error = ''
+                self._counter_retry_at = 0
+            return value
         except asyncio.TimeoutError:
-            self.counter_capability = "unavailable"
-            self.counter_error = "statistics request timed out"
-            self.counter_checked_at = time.time()
+            self.counter_capability = 'unavailable'
+            self.counter_error = 'Statistics request timed out; reconnect before using counter evidence'
+            self._counter_last_status = 'timed_out'
+            self._counter_retry_at = time.monotonic() + 30
+            self._counter_session_trusted = False
             return None
+        finally:
+            self._counter_elapsed = time.monotonic() - started
 
     async def _flood_tx(self):
         self.counter_checked_at = time.time()
@@ -266,17 +337,23 @@ class MeshCoreTransmitter(Transmitter):
                 raise ValueError("statistics response missing")
             payload = response.payload or {}
             if response.type == EventType.ERROR:
+                if payload.get('reason') in ('timeout', 'no_event_received') or ('error' in payload and 'error_code' not in payload):
+                    raise asyncio.TimeoutError()
                 if payload.get("error_code") == 1:
                     self.counter_capability = "unsupported"
                 raise ValueError(str(payload.get("reason") or "statistics rejected (code %s)" % payload.get("error_code", "unknown")))
             value = payload.get("flood_tx")
             if value is None:
                 raise ValueError("flood_tx field missing")
+            if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+                raise ValueError('invalid flood_tx counter')
             value = int(value)
-            if value < 0:
-                raise ValueError("negative flood_tx counter")
+            if not 0 <= value <= 0xffffffff:
+                raise ValueError("flood_tx counter outside uint32 range")
             self.counter_capability, self.counter_error = "available", ""
             return value
+        except asyncio.TimeoutError:
+            raise
         except Exception as exc:
             if self.counter_capability != "unsupported":
                 self.counter_capability = "unavailable"
@@ -284,29 +361,50 @@ class MeshCoreTransmitter(Transmitter):
             return None
 
     async def refresh_confirmation(self, result, timeout):
-        if result.confirmed or result.counter_before is None or result.counter_reset or not self.connected:
+        if (result.confirmed or result.counter_before is None or result.counter_reset or not self.connected
+                or result.counter_reads_used >= 3
+                or result.counter_session != self._counter_session or result.counter_send_sequence != self._send_sequence):
             return
-        after = await self._bounded_counter(timeout)
+        after = await self._sample_counter(result, timeout)
+        if result.counter_session != self._counter_session or result.counter_send_sequence != self._send_sequence:
+            result.counter_status = 'session_changed'
+            result.counter_error = 'Radio session or transmission changed; values cannot be compared'
+            return
         result.counter_after = after
         if after is not None and after < result.counter_before:
             result.counter_reset = True
-            return
-        if after is not None and after > result.counter_before:
+            result.counter_status = 'reset'
+            result.counter_error = 'Counter reset; values cannot be compared'
+        elif after is not None and after > result.counter_before:
             if not result.confirmed:
-                result.outcome = "local_confirmed"
-                result.detail = "Local transmission confirmed after initial wait"
-            for callback in tuple(result.listeners):
-                callback(result)
+                result.outcome = 'local_confirmed'
+                result.detail = ''
+            result.notify()
 
     def transmission_diagnostics(self):
         self.repeat_tracker.prune()
         return {"counter_capability": self.counter_capability, "counter_error": self.counter_error,
+                "counter_verification_usable": self._counter_session_trusted and self.counter_capability == 'available',
                 "counter_checked_at": self.counter_checked_at, "repeat_status": self.repeat_status,
                 "repeat_subscription_active": bool(self._subscriptions) and self.connected,
                 "last_rx_event_at": self.repeat_tracker.last_event_at,
                 "tracked_packets": len(self.repeat_tracker.pending),
                 "policy": vars(self.policy),
                 "last_result": self.last_result.as_record() if self.last_result is not None else None}
+
+    async def check_local_statistics(self):
+        """Read local packet statistics without submitting a channel message."""
+        from importlib.metadata import version, PackageNotFoundError
+        try:
+            sdk_version = version('meshcore')
+        except PackageNotFoundError:
+            sdk_version = 'not reported'
+        async with self._send_lock:
+            value = await self._bounded_counter(2.0, force=True)
+            return dict(value=value, status=self._counter_last_status, error=self.counter_error,
+                        elapsed_seconds=self._counter_elapsed, checked_at=self.counter_checked_at,
+                        verification_usable=self._counter_session_trusted and value is not None,
+                        sdk_version=sdk_version)
 
     async def close(self) -> None:
         for subscription in self._subscriptions + self._clock_subscriptions:
@@ -944,6 +1042,12 @@ class TransmitManager:
             result["clock"] = self.clock_status()
             return result
 
+    async def check_local_statistics(self):
+        if self._lock.locked() or self._active_notice is not None:
+            raise RuntimeError('Companion busy; wait for the current notice, CLI or settings operation')
+        async with self._lock:
+            return await self._saved_radio().check_local_statistics()
+
     async def set_device_name(self, name: str) -> str:
         async with self._lock:
             return await self._saved_radio().set_device_name(name)
@@ -1075,6 +1179,9 @@ class TransmitManager:
                 from meshcore import EventType
                 async def clock_connection(event):
                     if t.tx is tx:
+                        tx._reset_counter_session()
+                        if event.type == EventType.DISCONNECTED:
+                            tx._counter_session_trusted = False
                         self._clock.request('SDK connection changed')
                 for event_type in (EventType.CONNECTED, EventType.DISCONNECTED):
                     subscribe = getattr(tx._mc, "subscribe", None)
@@ -1264,10 +1371,17 @@ class TransmitManager:
             else:
                 submitted(TxResult("submitting", submitted=True))
             try:
-                result = await t.tx.send_text(text, ch)
-                last = result if isinstance(result, TxResult) else TxResult("local_confirmed", submitted=True, accepted=True)
+                result = (await t.tx.send_text(text, ch, retry_of=uncertain)
+                          if uncertain is not None and isinstance(t.tx, MeshCoreTransmitter)
+                          else await t.tx.send_text(text, ch))
+                last = TxResult.legacy(result)
             except TxUnsent as exc:
                 if exc.category == "already_confirmed":
+                    return uncertain, uncertain.detail
+                if exc.category == 'identity_changed' and uncertain is not None:
+                    uncertain.detail += '; ' + exc.detail
+                    if uncertain.log_id is not None:
+                        self._db.finish_transmission(uncertain)
                     return uncertain, uncertain.detail
                 last = TxResult("unconfirmed" if exc.category == "unverified" else "not_attempted" if exc.category == "stale" else "rejected", exc.detail,
                                 submitted=exc.category == "unverified")
@@ -1285,6 +1399,8 @@ class TransmitManager:
             finally:
                 if isinstance(t.tx, MeshCoreTransmitter):
                     t.tx.on_submission = None
+            if last.accepted and not last.confirmed:
+                last.outcome = 'accepted'
             last.attempt = total_attempts
             if log_id is not None:
                 last.log_id = log_id
@@ -1292,14 +1408,19 @@ class TransmitManager:
                 self._db.finish_transmission(last)
             if uncertain is not None and uncertain.confirmed:
                 return uncertain, uncertain.detail
-            if last.confirmed:
+            if last.confirmed or last.accepted:
                 t.error = ""
                 return last, last.detail
             if last.outcome == "unconfirmed":
                 uncertain = last
                 t.error = ""  # uncertainty is shown as evidence, not a broken connection
                 logger.warning("%s transmission unconfirmed (attempt %d): %s", t.name, total_attempts, last.detail)
-                if not policy.retry_unconfirmed or retry_used:
+                if not policy.retry_unconfirmed or retry_used or not last.retry_eligible:
+                    return last, last.detail
+                if not isinstance(t.tx, MeshCoreTransmitter) or not last.packet_id:
+                    last.detail += '; automatic retry unavailable: original packet identity not recorded'
+                    if last.log_id is not None:
+                        self._db.finish_transmission(last)
                     return last, last.detail
                 # Reserve before sleeping. A restart must not reset the retry budget.
                 retry_used = True
@@ -1311,8 +1432,6 @@ class TransmitManager:
                     reserve(context)
                 deadline = time.monotonic() + policy.retry_delay_seconds
                 while not last.confirmed and time.monotonic() < deadline:
-                    if isinstance(t.tx, MeshCoreTransmitter) and last.counter_before is not None:
-                        await t.tx.refresh_confirmation(last, min(0.75, max(0.001, deadline - time.monotonic())))
                     remaining = deadline - time.monotonic()
                     if last.confirmed or remaining <= 0:
                         break
@@ -1325,7 +1444,7 @@ class TransmitManager:
                     self._db.finish_transmission(last)
                 # One final bounded read closes the race at the end of the retry delay.
                 if isinstance(t.tx, MeshCoreTransmitter) and not last.confirmed:
-                    await t.tx.refresh_confirmation(last, 0.75)
+                    await t.tx.refresh_confirmation(last, 2.0)
                 if last.confirmed:
                     return last, last.detail
                 if valid_if is not None and not valid_if():

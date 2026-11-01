@@ -1,12 +1,14 @@
 {% for r in rows %}
+{% set evidence = r['evidence'] | transmission_evidence %}
+{% set recorded_activity = (evidence.get('evidence_version', 0) >= 2 and evidence.get('provenance') == 'observed') or (evidence.get('counter_before') is not none and evidence.get('counter_after') is not none and evidence.get('counter_after') > evidence.get('counter_before') and not evidence.get('counter_reset')) %}
 <div class="rec">
   <div class="rec-head">
     <span class="rec-time">{{ r["ts"] | localtime(tz) }}</span>
-    <span style="display:flex;gap:8px;align-items:center;">
+    <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       {% set tp = r["transport"] %}
       {% if tp %}<span class="pill radio">{{ "MeshCore" if tp == "meshcore" else tp }}</span>{% endif %}
       {% set outcome = r['outcome'] %}
-      <span class="pill {{ 'ok' if r['success'] else 'muted' if outcome in ('unconfirmed', 'submitting') else 'bad' }}">{{ {'local_confirmed':'Locally confirmed','repeat_confirmed':'Repeat confirmed','unconfirmed':'Unconfirmed','rejected':'Rejected','submitting':'Submission in progress','not_attempted':'Not attempted'}.get(outcome, outcome) }}</span>
+      <span class="pill {{ 'ok' if r['success'] else 'muted' if outcome in ('accepted', 'unconfirmed', 'submitting') else 'bad' }}">{% if outcome in ('local_confirmed','transmitted') and not recorded_activity %}Completed — legacy success (RF evidence not recorded){% else %}{{ {'accepted':'Accepted by companion','local_confirmed':'Local TX activity observed','repeat_confirmed':'Repeat heard','unconfirmed':'Command outcome unknown','rejected':'Rejected','submitting':'Submission in progress','not_attempted':'Not attempted'}.get(outcome, outcome) }}{% endif %}</span>
       <span class="pill muted">{{ "manual" if r["manual"] else "auto" }}</span>
       {% if tp %}
       <button class="secondary" style="padding:4px 12px;font-size:12.5px;"
@@ -28,11 +30,14 @@
     <div class="rec-area" >{{ r["error"] }}</div>
   </div>
   {% endif %}
-  {% set evidence = r['evidence'] | transmission_evidence %}
   <details><summary>Transmission evidence</summary>
     <p>Attempt {{ evidence.get('attempt', 1) }}{% if r['uncertainty_retry'] %} · optional uncertainty retry{% endif %}{% if evidence.get('elapsed_seconds') is not none %} · {{ '%.2f'|format(evidence.get('elapsed_seconds', 0)) }} seconds{% endif %}</p>
-    <p>Command accepted: {{ 'yes' if evidence.get('accepted') else 'not confirmed' }} · Heard repeats: {{ evidence.get('repeats', 0) }} observations</p>
+    <p>Command: {{ 'Accepted by companion' if evidence.get('accepted') else 'Rejected' if outcome == 'rejected' else 'Not attempted' if outcome == 'not_attempted' else 'Outcome unknown' }} · Heard repeats: {{ evidence.get('repeats', 0) }} observations</p>
+    <p>Local TX activity: {{ 'Observed' if evidence.get('counter_before') is not none and evidence.get('counter_after') is not none and evidence.get('counter_after') > evidence.get('counter_before') and not evidence.get('counter_reset') else 'Not verified' }}</p>
     <p>Local TX counter: {{ evidence.get('counter_before') if evidence.get('counter_before') is not none else 'unavailable' }} → {{ evidence.get('counter_after') if evidence.get('counter_after') is not none else 'unavailable' }}{% if evidence.get('counter_reset') %} · counter reset{% endif %}</p>
+    {% if evidence.get('counter_status') %}<p>Counter diagnostic: {{ evidence.get('counter_status') }}{% if evidence.get('counter_error') %} — {{ evidence.get('counter_error') }}{% endif %}</p>{% else %}<p>Legacy record: counter diagnostic not recorded</p>{% endif %}
+    {% for sample in evidence.get('counter_samples', []) %}<p>Statistics check: {{ sample.status }} · {{ '%.3f'|format(sample.elapsed_seconds) }} seconds{% if sample.error %} · {{ sample.error }}{% endif %}</p>{% endfor %}
+    {% if evidence.get('logical_id') %}<p>Repeat observations apply to this packet across its attempts.</p>{% endif %}
     {% if evidence.get('retry_pending') %}<p>Waiting before optional retry</p>{% endif %}
   </details>
 </div>

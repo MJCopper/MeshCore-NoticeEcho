@@ -11,7 +11,7 @@
     </div>
     <div class="side">
       <span class="pill {{ a.disposition }}">{{ disp_label.get(a.disposition, a.disposition) }}</span>
-      {% if a.transmit_status %}<span class="pill {{ a.transmit_status }}">{{ tx_label.get(a.transmit_status, a.transmit_status) }}</span>{% endif %}
+      {% if a.transmit_status %}<span class="pill {{ a.transmit_status }}">{{ a.delivery_label or tx_label.get(a.transmit_status, a.transmit_status) }}</span>{% endif %}
       <span class="time">{{ a.when }}</span>
     </div>
   </div>
