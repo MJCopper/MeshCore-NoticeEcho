@@ -94,6 +94,13 @@ TX_STATUS_LABELS = {
 
 
 def render(request: Request, name: str, **ctx):
+    if name == 'meshcore_settings.html':
+        device = ctx.get('device')
+        if device is not None and 'cli_supported' in device:
+            ctx['console_state'] = 'connected' if device['cli_supported'] else 'unsupported'
+        else:
+            # A failed full settings/channel read must not block a working CLI.
+            ctx['console_state'] = 'unchecked' if device is not None or getattr(_tx(request), 'connected', False) else 'disconnected'
     appearance = request.app.state.db.get_setting("appearance", "dark")
     if appearance not in ("light", "dark"):
         appearance = "dark"
@@ -952,16 +959,19 @@ async def meshcore_clock_action(request: Request, action: str = Form(...)):
 
 
 @router.post("/meshcore/settings/console")
-async def meshcore_console(request: Request, command: str = Form(...)):
-    from ..transmit import MeshCoreTransmitter
+async def meshcore_console(request: Request, command: str = Form("")):
+    from ..companion_cli import ConsoleError
     from fastapi.responses import JSONResponse
     try:
-        output = await _tx(request).execute_companion_command(command)
-        status, ok = 200, True
+        result = await _tx(request).execute_companion_command(command)
+        if isinstance(result, str):
+            result = dict(output=result, state='reply', refresh_required=False)
+        status, payload = 200, dict(result, ok=True)
     except (ValueError, RuntimeError) as exc:
-        output = str(exc)
-        status, ok = (400 if isinstance(exc, ValueError) else 503), False
-    return JSONResponse({"ok": ok, "output": MeshCoreTransmitter.redact_console(output)}, status_code=status,
+        state = exc.state if isinstance(exc, ConsoleError) else 'invalid' if isinstance(exc, ValueError) else 'disconnected'
+        status = 400 if state == 'invalid' else 409 if state == 'busy' else 504 if state == 'timed-out' else 503
+        payload = dict(ok=False, output=str(exc), state=state)
+    return JSONResponse(payload, status_code=status,
                         headers={"Cache-Control": "no-store"})
 
 

@@ -133,22 +133,16 @@ async def test_read_timeout_is_bounded_and_cancelled():
 
 
 @pytest.mark.asyncio
-async def test_manager_cli_shared_operations_aliases_json_and_notice_lock(monkeypatch):
+async def test_manager_clock_operations_still_respect_notice_and_settings_lock(monkeypatch):
     db,clock,radio,calls=setup()
-    manager=TransmitManager(db)
-    manager._clock=clock
+    manager=TransmitManager(db);manager._clock=clock
     monkeypatch.setattr(manager,'_saved_radio',lambda:radio)
-    assert 'Current time:' in await manager.execute_companion_command('clock')
-    for command in ['clock sync','st','sync_time']:
-        assert 'verified sync' in await manager.execute_companion_command(command)
-    data=json.loads(await manager.execute_companion_command('.clock'))
-    assert data['time']==data['companion_epoch']
-    assert 'restore server time' in await manager.execute_companion_command('time 100000')
     manager._active_notice=object()
     with pytest.raises(RuntimeError,match='busy'):await manager.check_companion_clock(force=True)
     manager._active_notice=None
     async with manager._lock:
-        with pytest.raises(RuntimeError,match='busy'):await manager.execute_companion_command('clock sync')
+        with pytest.raises(RuntimeError,match='busy'):await manager.check_companion_clock(force=True)
+    assert (await manager.check_companion_clock(force=True))['status']=='verified sync'
 
 
 @pytest.mark.asyncio

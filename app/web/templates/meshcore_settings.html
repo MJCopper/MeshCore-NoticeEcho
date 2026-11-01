@@ -6,6 +6,7 @@
   <h2 class="pt">MeshCore Settings</h2>
   <a class="see" href="/meshcore/settings">Refresh</a>
 </div>
+<div id="companion-device-settings">
 {% if saved_label %}<p class="hint">{{ saved_label }} saved on the radio.</p>{% endif %}
 {% if error %}<div class="panel"><p>{{ error }}</p></div>{% endif %}
 {% if created_channel %}
@@ -107,50 +108,102 @@
     {% else %}<p class="hint">No empty private channel slots are available.</p>{% endif %}
   </section>
 {% endif %}
+</div>
 <section class="panel">
-  <details id="companion-console"><summary>MeshCore CLI console</summary>
-    <p class="hint">Standard commands: ver; infos; get radio; get name; get stats_packets; set name &quot;My node&quot;; set radio 915,250,10,5. Run help, get help or set help for supported commands. These standard commands do not require native firmware CLI support. Quote names and messages containing spaces.</p>
-    <p class="hint">Native firmware CLI: {{ 'Available' if device and device.get('cli_supported') else 'Unavailable or not reported (requires companion protocol 14+)' }}. Use cli &lt;firmware command&gt; for firmware-specific commands. One command per submission. Interactive sessions, scripts, pipelines, file operations and background subscriptions require a local meshcore-cli terminal. History stays in this page until refreshed; sensitive output is hidden.</p>
-    <form id="console-form"><label for="console-command">Command</label><input id="console-command" maxlength="200" autocomplete="off" required list="console-history"><datalist id="console-history"></datalist><button id="console-run" type="submit">Run</button><button id="console-clear" type="button" class="secondary">Clear output</button></form>
-    <pre id="console-output" role="log" aria-live="polite" style="max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
+  <details id="companion-console" open><summary>MeshCore CLI console</summary>
+    <p class="hint">Send a command directly to this companion, using the same syntax as the MeshCore app. No cli prefix is needed. Commands and replies stay in this page until refreshed.</p>
+    <p class="hint">Native firmware CLI: {{ 'Available' if device and device.get('cli_supported') else 'Unavailable or not reported (requires companion protocol 14+)' }}. Firmware determines supported commands. One command per submission, up to 200 UTF-8 bytes.</p>
+    <form id="console-form" data-state="{{ console_state }}">
+      <label for="console-command">Command</label><input id="console-command" maxlength="200" autocomplete="off" spellcheck="false" required list="console-history" aria-describedby="console-status" placeholder="get name">
+      <datalist id="console-history"></datalist>
+      <button id="console-run" type="submit" {% if console_state not in ('connected', 'unchecked') %}disabled{% endif %}>Send</button>
+      <button id="console-refresh" type="button" class="secondary">Refresh connection</button>
+      <button id="console-clear" type="button" class="secondary">Clear output</button>
+    </form>
+    <p id="console-status" role="status" aria-live="polite">{{ 'Connected' if console_state == 'connected' else 'Connected — native CLI support checked on submission' if console_state == 'unchecked' else 'Unsupported: native companion CLI required' if console_state == 'unsupported' else 'Disconnected' }}</p>
+    <pre id="console-output" role="log" aria-live="polite" style="max-height:400px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
   </details>
 </section>
 <script>
 (() => {
   const form = document.getElementById('console-form'), input = document.getElementById('console-command');
   const output = document.getElementById('console-output'), run = document.getElementById('console-run');
-  const history = document.getElementById('console-history');
-  form.addEventListener('submit', async event => {
-    event.preventDefault(); if (run.disabled) return;
-    run.disabled = true;
-    const command = input.value.trim();
-    try {
-      const response = await fetch('/meshcore/settings/console', {method:'POST', body:new URLSearchParams({command})});
-      const result = await response.json();
-      output.textContent += `${new Date().toLocaleTimeString()} ${result.ok ? 'OK' : 'ERROR'}: ${result.output}\n\n`;
-      output.textContent = output.textContent.slice(-32768);
-      output.scrollTop = output.scrollHeight;
-      if (!/secret|key|pin|password|token|[0-9a-f]{32}/i.test(command)) {
-        if (!Array.from(history.options).some(item => item.value === command)) {
-          const item = document.createElement('option'); item.value = command; history.appendChild(item);
-          if (history.children.length > 30) history.firstElementChild.remove();
-        }
-      }
-      input.value = '';
-      if (result.ok && /^\.?(clock|time|st\b|sync_time|cli|set\b|set_channel\b|remove_channel\b|name|radio|tx-power|path-hash\s)/.test(command)) {
-        const page = await fetch('/meshcore/settings');
-        if (page.ok) {
-          const updated = new DOMParser().parseFromString(await page.text(), 'text/html');
-          const panels = Array.from(document.querySelectorAll('section.panel')).filter(panel => !panel.contains(form));
-          const replacements = Array.from(updated.querySelectorAll('section.panel')).filter(panel => !panel.querySelector('#console-form'));
-          if (panels.length === replacements.length) panels.forEach((panel, index) => panel.replaceWith(replacements[index]));
-          else output.textContent += 'Refresh the page to reload companion settings.\n';
-        } else output.textContent += 'Settings refresh failed; refresh the page.\n';
-      }
-    } catch (error) { output.textContent += 'Connection or refresh failed; refresh settings before retrying.\n'; }
-    finally { run.disabled = false; input.focus(); }
+  const historyList = document.getElementById('console-history'), status = document.getElementById('console-status');
+  const refresh = document.getElementById('console-refresh');
+  let available = ['connected','unchecked'].includes(form.dataset.state), pending = false, history = [], position = 0, draft = '';
+  const exchanges = [];
+  function append(text) {
+    exchanges.push(text);
+    if (exchanges.length > 100) exchanges.shift();
+    output.textContent = exchanges.join('');
+    output.scrollTop = output.scrollHeight;
+  }
+  function controls() { run.disabled = pending || !available; refresh.disabled = pending; }
+  async function refreshSettings() {
+    const response = await fetch('/meshcore/settings', {cache:'no-store'});
+    if (!response.ok) throw new Error('Settings refresh failed');
+    const updated = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const config = updated.getElementById('console-form');
+    if (!config) throw new Error('Console unavailable');
+    available = ['connected','unchecked'].includes(config.dataset.state);
+    form.dataset.state = config.dataset.state;
+    status.textContent = available ? 'Connected' : config.dataset.state === 'unsupported' ? 'Unsupported: native companion CLI required' : 'Disconnected';
+    const panel = document.getElementById('companion-device-settings');
+    const replacement = updated.getElementById('companion-device-settings');
+    if (panel && replacement) panel.replaceChildren(...replacement.childNodes);
+    controls();
+  }
+  input.addEventListener('keydown', event => {
+    if (!['ArrowUp','ArrowDown'].includes(event.key) || !history.length) return;
+    event.preventDefault();
+    if (position === history.length) draft = input.value;
+    position = Math.max(0, Math.min(history.length, position + (event.key === 'ArrowUp' ? -1 : 1)));
+    input.value = position === history.length ? draft : history[position];
   });
-  document.getElementById('console-clear').addEventListener('click', () => {output.textContent = '';});
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); if (pending || !available) return;
+    const command = input.value;
+    if (!command.trim() || new TextEncoder().encode(command).length > 200 || /[\x00-\x1f\x7f]/.test(command)) {
+      status.textContent = 'Enter one command of at most 200 UTF-8 bytes without control characters'; return;
+    }
+    pending = true; controls(); status.textContent = 'Waiting for response…';
+    append(`> ${command}\n`);
+    if (history[history.length - 1] !== command) history.push(command);
+    if (history.length > 30) history.shift();
+    position = history.length; draft = '';
+    historyList.replaceChildren(...history.map(command => {const option = document.createElement('option'); option.value = command; return option;}));
+    input.value = '';
+    try {
+      const response = await fetch('/meshcore/settings/console', {method:'POST', cache:'no-store', body:new URLSearchParams({command})});
+      const result = await response.json();
+      if (result.ok) {
+        append(result.output + (result.output.endsWith('\n') ? '\n' : '\n\n'));
+        status.textContent = result.output === '' ? 'Reply received (empty response)' : 'Reply received';
+        if (result.refresh_note) append(`[Settings] ${result.refresh_note}\n\n`);
+        if (result.refresh_required) {
+          try { await refreshSettings(); }
+          catch (error) { append('[Settings] Could not refresh settings. Use Refresh connection.\n\n'); }
+        }
+      } else {
+        append(`[${result.state || 'error'}] ${result.output}\n\n`);
+        status.textContent = result.state === 'busy' ? 'Companion busy' : result.state === 'unsupported' ? 'Unsupported' : result.state === 'timed-out' ? 'Timed out — reconnect before sending another command' : result.state === 'invalid' ? 'Invalid command input' : 'Disconnected or command rejected';
+        if (['unsupported','disconnected','timed-out','protocol-error'].includes(result.state)) available = false;
+      }
+    } catch (error) {
+      available = false;
+      status.textContent = 'Connection lost — command outcome unknown';
+      append('[Connection] No response received. The command may have applied. Refresh the connection before sending another command.\n\n');
+    } finally { pending = false; controls(); input.focus(); }
+  });
+  refresh.addEventListener('click', async () => {
+    if (pending) return;
+    pending = true; controls(); status.textContent = 'Checking connection…';
+    try { await refreshSettings(); }
+    catch (error) { available = false; status.textContent = 'Connection refresh failed'; }
+    finally { pending = false; controls(); }
+  });
+  document.getElementById('console-clear').addEventListener('click', () => {exchanges.length = 0; output.textContent = '';});
+  controls();
 })();
 </script>
 {% endblock %}

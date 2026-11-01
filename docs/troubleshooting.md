@@ -1,5 +1,7 @@
 # Troubleshooting and recovery
 
+The MeshCore Settings console sends commands directly to the local companion's native CLI. See [direct companion CLI](companion-console.md) for compatibility, command/response behaviour and timeout/reconnection handling.
+
 Open `/troubleshoot` to inspect BOM, NSW RFS, Live Traffic NSW and MeshCore together.
 
 The dashboard distinguishes current saved notices from lifetime History totals, and shows the last recorded selection/delivery counts. It reports service settings, poll interval, attempt/success times, scheduled poll, last poll duration, exclusions, enrichment availability and geographic uncertainty. Each Traffic feed has independent collection status and publication/observation information. Poll duration includes parsing and processing; recent HTTP logs show response status. Fresh fetching does not guarantee fresh provider data.

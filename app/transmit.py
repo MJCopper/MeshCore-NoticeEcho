@@ -466,76 +466,30 @@ class MeshCoreTransmitter(Transmitter):
             raise RuntimeError("Could not verify the saved path hash size; refresh before retrying")
         return size
 
-    @staticmethod
-    def redact_console(text):
-        import re
-        text = re.sub(r"(?im)^.*(?:secret|private.?key|password|pin|token).*$", "[sensitive output hidden]", str(text))
-        return re.sub(r"(?i)\b[0-9a-f]{32,}\b", "[key hidden]", text)[:8192]
-
     async def execute_console(self, command: str) -> str:
-        from .companion_cli import execute, parse
-        if not command.strip():
-            raise ValueError("Enter a command")
-        shortcuts = ("info", "channels", "stats", "path-hash", "name", "tx-power", "radio")
-        if command.strip().split(None, 1)[0] in shortcuts:
-            return await self._legacy_console(command)
-        words, help_output = parse(command)
-        if help_output is not None:
-            return help_output
+        from .companion_cli import execute, private_sdk_exchange, ConsoleError, validate, COMMAND_TIMEOUT
+        validate(command)
         if not self.connected:
-            raise RuntimeError("MeshCore radio is offline")
-        name = words[0].lstrip(".")
-        if name == "cli":
-            from meshcore import EventType
-            info = await self._mc.commands.send_device_query()
-            if info.type != EventType.DEVICE_INFO or (info.payload or {}).get("fw ver", 0) < 14 or not callable(getattr(self._mc.commands, "run_cli_command", None)) or not hasattr(EventType, "CLI_REPLY"):
-                raise RuntimeError("Native CLI unsupported; requires companion protocol 14+ and a compatible SDK")
-        changed = name in ("cli", "set", "set_channel", "remove_channel", "reboot")
-        if changed:
-            self._sender_name = None
-        result = await execute(self._mc, command)
-        if changed and name != "reboot":
-            from meshcore import EventType
-            info = await self._mc.commands.send_appstart()
-            if info.type == EventType.SELF_INFO:
-                self._sender_name = (info.payload or {}).get("name")
-        return result
-
-    async def _legacy_console(self, command: str) -> str:
-        import json
-        import shlex
-        from meshcore import EventType
-        if not command.strip() or len(command.encode("utf-8")) > 200 or any(ord(c) < 32 for c in command):
-            raise ValueError("Enter one command of at most 200 UTF-8 bytes without control characters")
-        words = shlex.split(command)
-        if words == ["help"]:
-            return "help | info | channels | stats core|radio|packets | path-hash [1|2|3] | name <name> | tx-power <dBm> | radio <MHz> <kHz> <SF> <CR> | cli <firmware command>"
-        if not self.connected:
-            raise RuntimeError("MeshCore radio is offline")
-        if words == ["info"]:
-            return json.dumps(await self.read_settings(), indent=2)
-        if words == ["channels"]:
-            return json.dumps(await self.read_channels(), indent=2)
-        if words[0] == "stats" and len(words) == 2 and words[1] in ("core", "radio", "packets"):
-            method = getattr(self._mc.commands, "get_stats_" + words[1], None)
-            if not callable(method):
-                raise RuntimeError("Statistics unsupported by this SDK")
-            result = await method()
-            if result is None or result.type == EventType.ERROR:
-                raise RuntimeError("Radio could not return statistics")
-            return json.dumps(result.payload or {}, indent=2, default=str)
-        if words[0] == "path-hash" and len(words) in (1, 2):
-            if len(words) == 1:
-                size = (await self.read_settings())["path_hash_bytes"]
-                return f"{size} bytes per hop" if size else "Path hash size not reported"
-            return f"Verified: {await self.set_path_hash_bytes(int(words[1]))} bytes per hop"
-        if words[0] == "name" and len(words) >= 2:
-            return "Verified name: " + await self.set_device_name(" ".join(words[1:]))
-        if words[0] == "tx-power" and len(words) == 2:
-            return f"Verified TX power: {await self.set_tx_power(int(words[1]))} dBm"
-        if words[0] == "radio" and len(words) == 5:
-            return json.dumps(await self.set_radio_parameters(float(words[1]), float(words[2]), int(words[3]), int(words[4])))
-        raise ValueError("Unknown command or arguments. Run help for supported commands")
+            raise ConsoleError('disconnected', 'MeshCore radio is offline; refresh the connection')
+        # Also serialize direct callers, independently of the manager lock.
+        if self._send_lock.locked():
+            raise ConsoleError('busy', 'Companion busy; wait for the current operation')
+        async with self._send_lock:
+            with private_sdk_exchange():
+                try:
+                    return await asyncio.wait_for(execute(self._mc, command), COMMAND_TIMEOUT)
+                except ConsoleError as exc:
+                    if exc.state in ('disconnected', 'protocol-error'):
+                        await self.close()
+                    raise
+                except Exception as exc:
+                    # The native reply has no request ID. Drop this SDK session
+                    # before allowing another command to wait for CLI_REPLY.
+                    await self.close()
+                    raise ConsoleError('timed-out', 'No reply received. The command may have applied. Connection reset; reconnect before sending another command.') from exc
+                except asyncio.CancelledError:
+                    await self.close()
+                    raise
 
     async def set_device_name(self, name: str) -> str:
         from meshcore import EventType
@@ -1009,44 +963,40 @@ class TransmitManager:
             except TimeoutError as exc:
                 raise RuntimeError("Path hash operation timed out; refresh before retrying") from exc
 
-    async def execute_companion_command(self, command: str) -> str:
-        import shlex
-        words = shlex.split(command)
-        if words and words[0].lstrip('.') in ('clock', 'time', 'st', 'sync_time'):
-            from .companion_cli import parse
-            parse(command)
-            name = words[0].lstrip('.')
-            target = int(words[1]) if name == 'time' else None
-            if target is not None and not 0 <= target <= 0xffffffff:
-                raise ValueError('Time must be a Unix timestamp between 0 and 4294967295')
-            result = await self.check_companion_clock(force=(name in ('st', 'sync_time') or words[1:] == ['sync']), target=target)
-            if result['status'] in ('failed', 'unsupported', 'inconclusive'):
-                raise RuntimeError(result['error'])
-            if target is not None and self._clock.policy()['enabled']:
-                result['note'] = 'Automatic synchronization will later restore server time; disable it to retain an explicit time'
-            if words[0].startswith('.'):
-                return json.dumps(dict(result, time=result['companion_epoch']))
-            return ('Current time: ' + result['companion_time'] + '\n' + result['status'] +
-                    f"; drift {result['drift_seconds']:.2f}s ±{result['uncertainty_seconds']:.2f}s" +
-                    ('\n' + result['note'] if result.get('note') else ''))
+    async def execute_companion_command(self, command: str) -> dict:
+        from .companion_cli import validate, ConsoleError, private_sdk_exchange
+        validate(command)
         if self._lock.locked() or self._active_notice is not None:
-            raise RuntimeError("Companion busy; wait for the current transmission or settings operation")
+            raise ConsoleError('busy', 'Companion busy; wait for the current transmission or settings operation')
         async with self._lock:
-            radio = self._saved_radio()
             try:
-                if command.strip().split(None, 1)[0].lstrip(".") in ("reboot", "cli"):
-                    self._clock.request("manual companion command")
-                output = await asyncio.wait_for(radio.execute_console(command), 15)
-                if command.strip().split(None, 1)[0].lstrip(".") in ("cli", "set", "set_channel", "remove_channel"):
+                radio = self._saved_radio()
+            except RuntimeError as exc:
+                raise ConsoleError('disconnected', str(exc)) from exc
+            # Native commands are extensible; unknown commands may change state.
+            read_only = command.strip().split(None, 1)[0].casefold() in ('get', 'help', 'version', 'ver', 'board', 'stats-core', 'stats-radio', 'stats-packets')
+            if not read_only:
+                radio._sender_name = None
+            output = await radio.execute_console(command)
+            result = dict(output=output, state='reply', refresh_required=not read_only, refresh_note='')
+            if not read_only:
+                self._clock.request('native companion CLI command')
+                with private_sdk_exchange():
                     try:
-                        await asyncio.wait_for(self._refresh_saved_channels(), 5)
-                    except (RuntimeError, TimeoutError):
-                        output += "\nCommand completed, but channel cache refresh failed. Refresh settings before using changed channels."
-                if command.strip().split(None, 1)[0].lstrip(".") in ("reboot", "cli"):
-                    self._clock.request("manual companion command")
-                return radio.redact_console(output)
-            except TimeoutError as exc:
-                raise RuntimeError("Command timed out; it may have applied. Refresh settings before retrying") from exc
+                        async def refresh():
+                            from meshcore import EventType
+                            info = await radio._mc.commands.send_appstart()
+                            if info.type != EventType.SELF_INFO or not isinstance((info.payload or {}).get('name'), str):
+                                raise RuntimeError('sender name unavailable')
+                            radio._sender_name = info.payload['name']
+                            await self._refresh_saved_channels()
+                        await asyncio.wait_for(refresh(), 5)
+                    except Exception:
+                        if hasattr(self._db, 'set_setting'):
+                            self._db.set_setting('meshcore_channels', [])
+                        await radio.close()
+                        result['refresh_note'] = 'Device replied, but saved settings could not be refreshed. Connection reset; reconnect before using changed settings.'
+            return result
 
     async def _refresh_saved_channels(self) -> None:
         channels = await self._saved_radio().read_channels()
