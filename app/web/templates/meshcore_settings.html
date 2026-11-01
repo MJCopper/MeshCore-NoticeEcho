@@ -113,6 +113,9 @@
   <details id="companion-console" open><summary>MeshCore CLI console</summary>
     <p class="hint">Send a command directly to this companion, using the same syntax as the MeshCore app. No cli prefix is needed. Commands and replies stay in this page until refreshed.</p>
     <p class="hint">Native firmware CLI: {{ 'Available' if device and device.get('cli_supported') else 'Unavailable or not reported (requires companion protocol 14+)' }}. Firmware determines supported commands. One command per submission, up to 200 UTF-8 bytes.</p>
+    <div id="console-output-label" class="fld-lbl">Reply received</div>
+    <p id="console-status" role="status" aria-live="polite">{{ 'Connected' if console_state == 'connected' else 'Connected — native CLI support checked on submission' if console_state == 'unchecked' else 'Unsupported: native companion CLI required' if console_state == 'unsupported' else 'Disconnected' }}</p>
+    <pre id="console-output" class="console-terminal" role="log" aria-live="polite" aria-labelledby="console-output-label" tabindex="0"></pre>
     <form id="console-form" data-state="{{ console_state }}">
       <label for="console-command">Command</label><input id="console-command" maxlength="200" autocomplete="off" spellcheck="false" required list="console-history" aria-describedby="console-status" placeholder="get name">
       <datalist id="console-history"></datalist>
@@ -120,8 +123,6 @@
       <button id="console-refresh" type="button" class="secondary">Refresh connection</button>
       <button id="console-clear" type="button" class="secondary">Clear output</button>
     </form>
-    <p id="console-status" role="status" aria-live="polite">{{ 'Connected' if console_state == 'connected' else 'Connected — native CLI support checked on submission' if console_state == 'unchecked' else 'Unsupported: native companion CLI required' if console_state == 'unsupported' else 'Disconnected' }}</p>
-    <pre id="console-output" role="log" aria-live="polite" style="max-height:400px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
   </details>
 </section>
 <script>
@@ -131,12 +132,27 @@
   const historyList = document.getElementById('console-history'), status = document.getElementById('console-status');
   const refresh = document.getElementById('console-refresh');
   let available = ['connected','unchecked'].includes(form.dataset.state), pending = false, history = [], position = 0, draft = '';
-  const exchanges = [];
+  const visibleLines = 16, scrollbackLines = 100;
+  let transcript = '';
+  function fitTerminal() {
+    const style = getComputedStyle(output);
+    const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const scrollbar = Math.max(0, output.offsetHeight - output.clientHeight - borders);
+    const height = visibleLines * parseFloat(style.lineHeight) + borders + padding + scrollbar;
+    if (Math.abs(output.getBoundingClientRect().height - height) > 0.5) output.style.height = `${height}px`;
+  }
   function append(text) {
-    exchanges.push(text);
-    if (exchanges.length > 100) exchanges.shift();
-    output.textContent = exchanges.join('');
-    output.scrollTop = output.scrollHeight;
+    const follow = output.scrollHeight - output.clientHeight - output.scrollTop <= 2;
+    const top = output.scrollTop, left = output.scrollLeft;
+    // Retain newline characters, including CRLF and blank separator rows.
+    const lines = (transcript + text).match(/[^\r\n]*(?:\r\n|\r|\n|$)/g).filter(line => line.length);
+    const removed = Math.max(0, lines.length - scrollbackLines);
+    transcript = lines.slice(-scrollbackLines).join('');
+    output.textContent = transcript;
+    fitTerminal();
+    output.scrollTop = follow ? output.scrollHeight : Math.max(0, top - removed * parseFloat(getComputedStyle(output).lineHeight));
+    output.scrollLeft = left;
   }
   function controls() { run.disabled = pending || !available; refresh.disabled = pending; }
   async function refreshSettings() {
@@ -167,7 +183,8 @@
       status.textContent = 'Enter one command of at most 200 UTF-8 bytes without control characters'; return;
     }
     pending = true; controls(); status.textContent = 'Waiting for response…';
-    append(`> ${command}\n`);
+    const time = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+    append(`${time}\n> ${command}\n`);
     if (history[history.length - 1] !== command) history.push(command);
     if (history.length > 30) history.shift();
     position = history.length; draft = '';
@@ -178,7 +195,7 @@
       const result = await response.json();
       if (result.ok) {
         append(result.output + (result.output.endsWith('\n') ? '\n' : '\n\n'));
-        status.textContent = result.output === '' ? 'Reply received (empty response)' : 'Reply received';
+        status.textContent = result.output === '' ? 'Reply received (empty response)' : 'Ready';
         if (result.refresh_note) append(`[Settings] ${result.refresh_note}\n\n`);
         if (result.refresh_required) {
           try { await refreshSettings(); }
@@ -202,7 +219,10 @@
     catch (error) { available = false; status.textContent = 'Connection refresh failed'; }
     finally { pending = false; controls(); }
   });
-  document.getElementById('console-clear').addEventListener('click', () => {exchanges.length = 0; output.textContent = '';});
+  document.getElementById('console-clear').addEventListener('click', () => {transcript = ''; output.textContent = ''; fitTerminal();});
+  if ('ResizeObserver' in window) new ResizeObserver(fitTerminal).observe(output);
+  window.addEventListener('resize', fitTerminal);
+  fitTerminal();
   controls();
 })();
 </script>
