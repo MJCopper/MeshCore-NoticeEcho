@@ -10,7 +10,7 @@ from pathlib import Path
 import datetime
 
 from fastapi import APIRouter, Form, Request, Query, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import __version__
@@ -259,6 +259,9 @@ def _dash_ctx(request) -> dict:
     )
     services = []
     problems = []
+    for worker in worker_status(request.app):
+        if not worker['ready']:
+            problems.append(('critical', f"{worker['source'].upper()} polling worker {worker['state']}: {worker['last_error']}"))
     for label, key, url, settings_url, enabled_default, interval_default, last_poll, last_success, result in service_specs:
         enabled = bool(db.get_setting(f"{key}_enabled", enabled_default))
         minutes = polling_seconds(db.get_setting(f"{key}_poll_minutes", interval_default),
@@ -352,6 +355,28 @@ async def healthz(request: Request):
     # Used by the Docker HEALTHCHECK; deliberately does no DB/radio work so it
     # is a pure liveness signal, not a readiness check.
     return PlainTextResponse("ok")
+
+
+def worker_status(app):
+    workers = []
+    for name in ('poller', 'rfs_poller', 'traffic_poller'):
+        worker = getattr(getattr(app.state, name, None), 'worker', None)
+        if worker is not None:
+            workers.append(worker.snapshot())
+    return workers
+
+
+@router.get('/readyz')
+async def readyz(request: Request):
+    """No database access: worker failures remain visible during SQLite contention."""
+    workers = worker_status(request.app)
+    ready = len(workers) == 3 and all(w['ready'] for w in workers)
+    db = getattr(request.app.state, 'db', None)
+    runtime = db.runtime_status() if hasattr(db, 'runtime_status') else {}
+    ready = ready and not runtime.get('deferred_delivery_writes')
+    return JSONResponse(dict(ready=ready, workers=workers,
+                             database=runtime),
+                        status_code=200 if ready else 503)
 
 
 # ---- dashboard ---------------------------------------------------------

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import secrets
 import time
+import sqlite3
 
 from . import __version__
 from .config import polling_seconds, QUEUE_MAX, QUEUE_BYTE_MAX
@@ -117,7 +118,7 @@ async def replay_source(db, tx, source, snapshot, force, state):
             await poller._process(item, rules, settings.get('display_timezone', 'Australia/Sydney'),
                                   int(settings.get('meshcore_channel', 0)), bool(settings.get('dry_run', True)), settings=settings, force=force, observe=False)
             # Update selection/detail without refreshing the provider observation timestamp.
-            with db._lock:
+            with db.transaction("replay_source"):
                 db._conn.execute('UPDATE bom_current SET raw_data=?, selection=?, selection_reason=?, council_match=?, '
                                  'matched_councils=?, match_method=?, match_reason=? WHERE alert_id=?',
                                  (json.dumps(item),item.get('selection',''),item.get('selection_reason',''),item.get('council_match','unknown'),
@@ -150,7 +151,7 @@ class Troubleshooting:
         self.task = None
         self.job = None
         db = app.state.db
-        with db._lock:
+        with db.transaction("__init__"):
             db._conn.execute('CREATE TABLE IF NOT EXISTS troubleshoot_jobs '
                              '(id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             saved = db._conn.execute('SELECT data FROM troubleshoot_jobs ORDER BY rowid DESC LIMIT 1').fetchone()
@@ -164,7 +165,7 @@ class Troubleshooting:
 
     def save(self):
         db = self.app.state.db
-        with db._lock:
+        with db.transaction("save"):
             db._conn.execute('INSERT OR REPLACE INTO troubleshoot_jobs(id,data) VALUES(?,?)',
                              (self.job['id'], json.dumps(self.job)))
             db._conn.execute('DELETE FROM troubleshoot_jobs WHERE rowid NOT IN '
@@ -307,6 +308,19 @@ class Troubleshooting:
 
 
 def diagnostics(app):
+    from .web.routes import worker_status
+    db = app.state.db
+    runtime = dict(workers=worker_status(app),
+                   database_runtime=db.runtime_status(),
+                   maintenance_activity=dict(getattr(db, 'maintenance_activity', {})))
+    try:
+        return _diagnostics(app) | runtime
+    except sqlite3.Error as exc:
+        # This endpoint must still explain a database failure without another write.
+        return dict(database_unavailable=True, error=str(exc), **runtime)
+
+
+def _diagnostics(app):
     db, tx = app.state.db, app.state.tx
     settings = db.all_settings()
     services=[]

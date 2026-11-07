@@ -1,6 +1,6 @@
 # Database maintenance
 
-NoticeEcho runs daily maintenance independently of BOM, RFS and Traffic polling. The first run is due on startup if no completed schedule is recorded, then every 24 hours after completion. Failures retry after one hour. Disabling scheduled maintenance does not disable explicit operator actions.
+NoticeEcho runs daily maintenance independently of BOM, RFS and Traffic polling. The first run is due on startup if no completed schedule is recorded, then every 24 hours after successful completion. Failed or deferred runs retry after one hour. Disabling scheduled maintenance does not disable explicit operator actions.
 
 On **Settings → Database Maintenance**, configure retention, inspect storage and table counts, run maintenance, create a backup, or run quick/full integrity checks. Actions run in a worker thread with one action at a time; shutdown waits for active work before closing SQLite. No action fetches feeds, reprocesses notices or transmits messages.
 
@@ -17,7 +17,9 @@ Retention accepts 1–3650 days; backup retention accepts 1–100 snapshots. Pro
 
 ## Protection and cleanup
 
-Maintenance creates and verifies a consistent SQLite snapshot before deleting anything. Backup or health-check failure stops cleanup. Deletes commit in batches of 250, up to 20 batches per table per run; a large backlog is cleared over subsequent runs. Each batch recomputes protection against current delivery state. Lock or storage failures are reported; previously committed batches remain committed.
+Maintenance creates and verifies a consistent SQLite snapshot before deleting anything. Backup or health-check failure stops cleanup. Deletes commit in batches of up to 50 candidates, up to 100 batches per table, with a ten-second cleanup budget. Candidate scans first exclude records newer than retention. Each batch recomputes protection against current delivery state. Scan cursors are saved so subsequent runs progress past protected records. A busy or interrupted batch rolls back and is deferred; previously committed batches remain committed.
+
+Maintenance writes share the application's database mutex. Individual cleanup queries use a 250ms execution budget and a 250ms SQLite busy timeout. These limits bound SQLite work and contention waits; they cannot interrupt blocked operating-system or network-filesystem I/O. New indexes support protected-history and pending-provider lookups. The stage, deferred work and batch duration are available in database diagnostics.
 
 History protection retains queued, deferred, failed and interrupted delivery records, the latest decision, latest broadcast and latest completed/potentially delivered broadcast for each service/provider ID, plus records involved in submission, pending uncertainty retry or active repeat tracking. These identity anchors support duplicate suppression and closure notices even after old current records are removed. Transmission logs linked to retained history are preserved, including legacy JSON attempt/log ID links. Unlinked submissions, pending retries and active repeat windows are also protected.
 
@@ -28,6 +30,8 @@ Settings, feed health, migration markers, classification backups, troubleshootin
 ## Backups and recovery
 
 Snapshots are written beside the database in `<database filename>.backups/`. New snapshots use temporary files, SQLite's online backup API, quick and foreign-key checks, restrictive file permissions and atomic publication. Rotation occurs only after successful verification. The UI shows the verified path and timestamp. Snapshots contain complete settings, including connection secrets, and history; retain their restricted permissions.
+
+Online copying reports page progress and aborts after a 60-second budget when the backup API next reports progress, including lock retries. Connections are explicitly closed and temporary database/WAL/SHM files are cleaned up. An interrupted copy does not replace or rotate verified backups. Integrity checks and publication follow a completed copy.
 
 Copy verified snapshots to separate storage to protect against loss of the device or volume. Backups beside the database protect against application mistakes, not loss of that storage. Restore with NoticeEcho stopped: preserve the existing database and its WAL/SHM files, replace the database with the chosen verified snapshot, remove the old database's WAL/SHM files from the active location, then restart. Do not combine a restored database with an unrelated WAL.
 
@@ -62,6 +66,8 @@ python -m app.maintenance compact --database /path/to/noticeecho.db --confirm-st
 The confirmation flag is an operator assertion, not automatic detection of every other process using SQLite. Keep other database users stopped during compaction. Health-check CLI commands are `check` and `deep-check`, with the same `--database` argument. Full check and compaction failures return a nonzero exit code.
 
 See [implementation validation](database-maintenance-audit.md).
+
+For polling recovery, readiness and database lock diagnostics, see [database lock recovery](database-lock-recovery.md).
 
 The shared source catalogue is included in backups and table counts. Absent catalogue entries become eligible for stale-notice cleanup after two successful missing snapshots and the configured grace period since last observation. Pending deliveries are protected; display filtering never deletes records. See [current items](current-items.md).
 

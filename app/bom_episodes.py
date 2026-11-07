@@ -113,7 +113,7 @@ class Episodes:
 
     @contextmanager
     def transaction(self):
-        with self.db._lock:
+        with self.db.transaction('bom episode'):
             self.db._conn.execute('BEGIN IMMEDIATE')
             try:
                 yield self.db._conn
@@ -326,7 +326,7 @@ class Episodes:
 
 def upgrade_delivery_trigger(db):
     """Atomically refresh the old trigger once, including on concurrent startup."""
-    with db._lock, db._conn:
+    with db.transaction('delivery trigger upgrade'):
         db._conn.execute('BEGIN IMMEDIATE')
         if not db._conn.execute("SELECT 1 FROM history_migrations WHERE name='delivery_evidence_v2'").fetchone():
             db._conn.execute('DROP TRIGGER IF EXISTS bom_announcement_delivery')

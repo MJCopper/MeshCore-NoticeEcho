@@ -26,6 +26,8 @@ The page reports radio connection/target/channel and connection error, effective
 
 Local radio confirmation does not establish remote reception. Simplified geographic boundaries and a road point do not establish the whole affected footprint. Missing provider timezone remains explicitly uncertain.
 
+**Polling workers and database contention** reports each worker's state, restart count, consecutive failures and next attempt, plus SQLite failure codes, operation/wait duration, last recovery, deferred delivery writes and maintenance progress. This information remains available through `/troubleshoot/status` when ordinary database queries fail. `/readyz` returns 503 for stopped/restarting/backing-off polling workers or pending delivery bookkeeping, and 200 once ready; `/healthz` remains a database-independent event-loop liveness check. See [database lock recovery](database-lock-recovery.md).
+
 ## Captured logs and export
 
 Application logging plus Python stdout/stderr are captured to a live window. Pause/resume, service and severity filters, search, and filtered JSONL download are available. The memory/window buffer holds 1,000 records and each record is capped at 8 KiB. Redacted disk logs rotate at 1 MiB with two backups beside the database; recent captured output is reloaded on restart.

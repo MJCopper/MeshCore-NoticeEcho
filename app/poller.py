@@ -1,6 +1,8 @@
 """BOM polling background task."""
 from __future__ import annotations
 
+from .polling_runtime import PollWorker
+
 from .transmission import NOTICE_COMPLETED
 
 from .notice_selection import evaluate, values_for
@@ -66,51 +68,24 @@ class BomPoller:
         self._stopped = False
         self._enricher = BOMWarningEnricher()
         self._council_index = None
+        self.worker = PollWorker("bom", self._db, self, self._wake)
 
-    def start(self) -> None:
-        self._stopped = False
-        self._task = asyncio.create_task(self._run(), name="bom-poller")
+    def start(self):
+        self._task = self.worker.start(self._run)
 
-    async def stop(self) -> None:
-        self._stopped = True
-        self._wake.set()
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+    async def stop(self):
+        await self.worker.stop()
 
     def poke(self) -> None:
         self._wake_generation += 1
         self._wake.set()
 
-    async def _run(self) -> None:
-        while not self._stopped:
-            generation = self._wake_generation
-            try:
-                await asyncio.wait_for(self.poll_once(), timeout=POLL_HARD_TIMEOUT)
-            except asyncio.TimeoutError:
-                self.status.last_poll_result = "error: poll timed out (aborted by watchdog)"
-                self._db.add_error("poller", "poll hung and was aborted after %ds" % POLL_HARD_TIMEOUT)
-                logger.error("poll_once exceeded %ds; aborted by watchdog", POLL_HARD_TIMEOUT)
-            except Exception as exc:
-                self.status.last_poll_result = f"error: {exc}"
-                self._db.add_error("poller", str(exc))
-                logger.exception("unexpected poll error")
-            if self._wake_generation != generation:
-                continue
-            interval = polling_seconds(self._db.get_setting("bom_poll_minutes", 5), 5)
-            self._wake.clear()
-            self.next_poll_at = datetime.fromtimestamp(time.time() + interval, timezone.utc).isoformat()
-            try:
-                await asyncio.wait_for(self._wake.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                pass
-            except asyncio.CancelledError:
-                return
+    async def _run(self):
+        await self.worker.loop(self.poll_once, lambda: self._wake_generation, timeout=POLL_HARD_TIMEOUT)
 
     async def poll_once(self):
+        if hasattr(self._db, 'flush_deferred'):
+            self._db.flush_deferred()
         async with self._poll_lock:
             started = time.monotonic()
             try:

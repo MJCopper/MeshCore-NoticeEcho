@@ -171,7 +171,7 @@ async def database_settings(request: Request, body: MaintenanceSettings):
         if key != 'maintenance_enabled' and not 1 <= value <= (100 if key=='maintenance_backup_keep' else 3650):
             raise HTTPException(422,'Retention must be 1–3650 days; backup count must be 1–100')
     db=request.app.state.db
-    with db._lock:
+    with db.transaction("database_settings"):
         try:
             for key,value in values.items():
                 db._conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,json.dumps(value)))

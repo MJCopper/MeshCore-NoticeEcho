@@ -39,6 +39,15 @@ async def _startup_radio(tx: TransmitManager) -> None:
     await tx.reconfigure()
 
 
+async def _delivery_bookkeeping(db):
+    while True:
+        try:
+            db.flush_deferred()
+        except Exception:
+            logger.warning('Delivery bookkeeping waiting for database recovery', exc_info=True)
+        await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = load_bootstrap()
@@ -81,6 +90,7 @@ async def lifespan(app: FastAPI):
     app.state.liveness = liveness
 
     tx.start()
+    bookkeeping_task = asyncio.create_task(_delivery_bookkeeping(db))
     startup_task = asyncio.create_task(_startup_radio(tx))
     app.state.startup_task = startup_task
     poller.start()
@@ -93,6 +103,11 @@ async def lifespan(app: FastAPI):
         logger.info("shutting down NoticeEcho")
         liveness.stop()          # first: never force-exit during a clean shutdown
         beat_task.cancel()
+        bookkeeping_task.cancel()
+        try:
+            await bookkeeping_task
+        except asyncio.CancelledError:
+            pass
         if not startup_task.done():
             startup_task.cancel()
         await app.state.maintenance.close()

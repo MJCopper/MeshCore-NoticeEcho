@@ -1,8 +1,8 @@
 """SQLite storage: settings, alert state (dedupe), history, transmit log, errors.
 
-The database is the source of truth. A single connection is shared across the
-asyncio loop and the transmit worker thread, guarded by a lock. SQLite calls
-are fast local operations, so running them synchronously is fine.
+The database is the source of truth. Application writes use one serialized
+connection with rollback on failure and short SQLite contention waits.
+Maintenance coordinates its separate writer through the same ownership lock.
 """
 from __future__ import annotations
 
@@ -12,7 +12,10 @@ from .transmission import TxResult, CONFIRMED, COMPLETED, NOTICE_COMPLETED, aggr
 
 import json
 import sqlite3
+import logging
 import threading
+from contextlib import contextmanager
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +24,7 @@ from typing import Any, Optional
 from .config import DEFAULT_SETTINGS, STATE_EXPIRY_HOURS
 from . import catalogue
 from . import bom_episodes
+from .database_runtime import BUSY_MILLISECONDS, Contention, filesystem, defer_locked
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -96,6 +100,10 @@ CREATE INDEX IF NOT EXISTS idx_service_history_ts ON service_history(ts, id);
 CREATE INDEX IF NOT EXISTS idx_service_history_transmitted ON service_history(transmit_status, ts);
 CREATE INDEX IF NOT EXISTS idx_service_history_source ON service_history(source, ts);
 CREATE INDEX IF NOT EXISTS idx_service_history_external ON service_history(source, external_id, id);
+CREATE INDEX IF NOT EXISTS idx_service_pending_identity ON service_history(source,external_id)
+ WHERE transmit_status IN ('queued','deferred','failed','interrupted');
+CREATE INDEX IF NOT EXISTS idx_service_pending_provider ON service_history(source,substr(external_id,instr(external_id,':')+1))
+ WHERE transmit_status IN ('queued','deferred','failed','interrupted');
 CREATE TABLE IF NOT EXISTS history_migrations (
     name TEXT PRIMARY KEY
 );
@@ -210,10 +218,14 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        # A write that hits a lock should WAIT (up to 5s) for it to clear rather
-        # than fail instantly with "database is locked".
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        # Keep synchronous waits short; source workers retry with async backoff.
+        self._conn.execute(f"PRAGMA busy_timeout={BUSY_MILLISECONDS}")
         self._lock = threading.Lock()
+        self._deferred_lock = threading.Lock()
+        self._flush_lock = threading.Lock()
+        self._deferred = deque()
+        self.contention = Contention()
+        self.filesystem = filesystem(path)
         self._init_schema()
         self.fresh_install = not bool(self._conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone())
         self._seed_settings()
@@ -223,9 +235,37 @@ class Database:
         self.bom_episodes = bom_episodes.Episodes(self)
         self.bom_episodes.bootstrap()
 
+    @contextmanager
+    def transaction(self, operation):
+        """Keep rollback and diagnostics inside the connection's ownership lock."""
+        with self._lock, self.contention.operation(operation):
+            try:
+                yield self._conn
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def runtime_status(self):
+        return dict(path=self.path, journal_mode='memory' if self.path == ':memory:' else 'wal',
+                    filesystem=self.filesystem, busy_timeout_ms=BUSY_MILLISECONDS,
+                    deferred_delivery_writes=len(self._deferred), **self.contention.snapshot())
+
+    def flush_deferred(self):
+        """Replay database bookkeeping only, before admitting new submissions."""
+        with self._flush_lock:
+            while True:
+                with self._deferred_lock:
+                    if not self._deferred:
+                        return
+                    function, args, kwargs = self._deferred[0]
+                function(self, *args, **kwargs)
+                with self._deferred_lock:
+                    self._deferred.popleft()
+
     def _migrate_notice_groups(self):
         from .notice_selection import grouped_policy, validate
-        with self._lock:
+        with self.transaction("_migrate_notice_groups"):
             with self._conn:
                 for service in ("bom", "rfs", "traffic"):
                     key = service + "_notice_selection"
@@ -239,7 +279,7 @@ class Database:
                     self._conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(new), key))
 
     def _init_schema(self) -> None:
-        with self._lock:
+        with self.transaction("_init_schema"):
             self._conn.executescript(SCHEMA)
             history_columns = {
                 row["name"] for row in self._conn.execute("PRAGMA table_info(history)")
@@ -268,6 +308,7 @@ class Database:
             ):
                 if name not in transmit_columns:
                     self._conn.execute(f"ALTER TABLE transmit_log ADD COLUMN {name} {definition}")
+            self._conn.execute('CREATE INDEX IF NOT EXISTS idx_txlog_history ON transmit_log(service_history_id)')
             self._conn.execute("UPDATE transmit_log SET outcome = CASE WHEN success = 1 THEN 'local_confirmed' ELSE 'rejected' END WHERE outcome = ''")
             self._conn.execute("UPDATE transmit_log SET outcome = 'unconfirmed', success = NULL WHERE outcome = 'rejected' AND error LIKE '%transmission cannot be confirmed%'")
             self._conn.execute("UPDATE transmit_log SET outcome = 'unconfirmed', success = NULL, error = 'Application stopped during submission; message may have transmitted' WHERE outcome = 'submitting'")
@@ -394,7 +435,7 @@ class Database:
         )
 
     def _seed_settings(self) -> None:
-        with self._lock:
+        with self.transaction("_seed_settings"):
             cur = self._conn.execute("SELECT key FROM settings")
             existing = {r["key"] for r in cur.fetchall()}
             if "bom_poll_minutes" not in existing and "poll_interval" in existing:
@@ -446,7 +487,7 @@ class Database:
         return {r["key"]: json.loads(r["value"]) for r in rows}
 
     def set_setting(self, key: str, value: Any) -> None:
-        with self._lock:
+        with self.transaction("set_setting"):
             self._conn.execute(
                 "INSERT INTO settings(key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -461,7 +502,7 @@ class Database:
         successful_regions = successful_regions & {"NSW"}
         if not successful_regions:
             return
-        with self._lock, self._conn:
+        with self.transaction("replace_bom_current"):
             for region in successful_regions:
                 self._conn.execute("DELETE FROM bom_current WHERE region = ?", (region,))
                 self._conn.execute(
@@ -551,7 +592,7 @@ class Database:
         disposition: str,
         sent_ts: Optional[str],
     ) -> None:
-        with self._lock:
+        with self.transaction("upsert_state"):
             self._conn.execute(
                 """INSERT INTO alert_state
                    (alert_id, event, headline, expires, msg_hash, sent_ts,
@@ -573,7 +614,7 @@ class Database:
     def purge_expired_state(self) -> int:
         """Remove state rows 48h past their alert expiry."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=STATE_EXPIRY_HOURS)
-        with self._lock:
+        with self.transaction("purge_expired_state"):
             cur = self._conn.execute(
                 "DELETE FROM alert_state WHERE julianday(expires)<julianday(?) "
                 "AND NOT EXISTS (SELECT 1 FROM bom_current b WHERE b.alert_id=alert_state.alert_id) "
@@ -595,7 +636,7 @@ class Database:
         if get_history_source(source) is None:
             # Sources must register before writing; a typo must not fork history.
             raise ValueError(f"unregistered history source: {source}")
-        with self._lock, self._conn:
+        with self.transaction("add_service_history"):
             cur = self._conn.execute(
                 """INSERT INTO service_history
                    (ts, source, external_id, title, area, disposition,
@@ -618,9 +659,10 @@ class Database:
                 "ORDER BY id DESC LIMIT 1", (source, external_id),
             ).fetchone()
 
+    @defer_locked
     def update_service_history(self, row_id: int, transmit_status: str,
                                detail: Optional[str] = None) -> None:
-        with self._lock:
+        with self.transaction("update_service_history"):
             if transmit_status == "success":
                 row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id = ?", (row_id,)).fetchone()
                 parts = json.loads(row["delivery_parts"] or "[]") if row else []
@@ -641,10 +683,11 @@ class Database:
                 )
             self._conn.commit()
 
+    @defer_locked
     def record_delivery_part(self, row_id: int, index: int, total: int,
                              ok: bool, error: str = "") -> None:
         """Persist the local transmit outcome for each part of a notice."""
-        with self._lock:
+        with self.transaction("record_delivery_part"):
             row = self._conn.execute(
                 "SELECT delivery_parts FROM service_history WHERE id = ?", (row_id,)
             ).fetchone()
@@ -791,7 +834,7 @@ class Database:
         return self.latest_service_history("bom", alert_id)
 
     def refresh_dry_run_history_text(self, history_id: int, transmitted_text: str) -> None:
-        with self._lock:
+        with self.transaction("refresh_dry_run_history_text"):
             self._conn.execute(
                 "UPDATE service_history SET transmitted_text = ? WHERE id = ? "
                 "AND source = 'bom' AND transmit_status = 'dry-run'",
@@ -806,7 +849,7 @@ class Database:
 
     def prune_history(self, keep_days: int = 90) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat(timespec="seconds")
-        with self._lock:
+        with self.transaction("prune_history"):
             from .maintenance import PROTECTED
             cur = self._conn.execute(f"DELETE FROM service_history WHERE ts < ? AND NOT ({PROTECTED})", (cutoff,))
             self._conn.commit()
@@ -833,7 +876,7 @@ class Database:
 
     def traffic_save_item(self, item, council: str, active: bool, match=None, *, catalogue_observation=True) -> None:
         selection = notice_evaluate("traffic", notice_values("traffic", item), self.all_settings()).metadata()
-        with self._lock:
+        with self.transaction("traffic_save_item"):
             self._conn.execute(
                 """INSERT INTO traffic_items
                    (item_id, feed, title, category, road, suburb, council, revision_hash, last_seen, active)
@@ -858,7 +901,7 @@ class Database:
             self._conn.commit()
 
     def traffic_mark_sent(self, item_id: str, revision: str) -> None:
-        with self._lock:
+        with self.transaction("traffic_mark_sent"):
             self._conn.execute("UPDATE traffic_items SET last_sent_hash = ? WHERE item_id = ?", (revision, item_id))
             self._conn.commit()
 
@@ -884,7 +927,7 @@ class Database:
             ).fetchone()
 
     def traffic_recover_queued(self) -> int:
-        with self._lock:
+        with self.transaction("traffic_recover_queued"):
             cur = self._conn.execute(
                 "UPDATE service_history SET transmit_status = 'interrupted', "
                 "detail = 'Send interrupted before confirmation; current incident will be retried' "
@@ -894,7 +937,7 @@ class Database:
             return cur.rowcount
 
     def traffic_missing_after_poll(self, seen_ids: set[str], successful_feeds: set[str] | None = None) -> list[dict]:
-        with self._lock, self._conn:
+        with self.transaction("traffic_missing_after_poll"):
             rows = self._conn.execute("SELECT * FROM traffic_items").fetchall()
             missing = [row for row in rows if row["item_id"] not in seen_ids
                        and (successful_feeds is None or row["feed"] in successful_feeds)]
@@ -916,7 +959,7 @@ class Database:
             ).fetchall()
 
     def traffic_record_feed_status(self, successful, errors, published, checked):
-        with self._lock:
+        with self.transaction("traffic_record_feed_status"):
             for feed in set(successful) | set(errors):
                 stamp = datetime.fromtimestamp(published[feed], timezone.utc).isoformat() if published.get(feed) is not None else ""
                 self._conn.execute(
@@ -961,7 +1004,7 @@ class Database:
 
     def _upgrade_catalogue(self):
         """Import only saved evidence once; never fabricate older BOM snapshots."""
-        with self._lock, self._conn:
+        with self.transaction("_upgrade_catalogue"):
             if self._conn.execute("SELECT 1 FROM history_migrations WHERE name='source_catalogue_v1'").fetchone():
                 return
             for source, table in (("bom", "bom_current"), ("rfs", "rfs_incidents"), ("traffic", "traffic_items")):
@@ -1017,7 +1060,7 @@ class Database:
 
     def rfs_save_incident(self, incident, revision_hash: str, *, catalogue_observation=True) -> None:
         selection = notice_evaluate("rfs", notice_values("rfs", incident), self.all_settings()).metadata()
-        with self._lock:
+        with self.transaction("rfs_save_incident"):
             self._conn.execute(
                 """INSERT INTO rfs_incidents
                    (incident_id, name, level, council, location, status, kind,
@@ -1041,7 +1084,7 @@ class Database:
             self._conn.commit()
 
     def rfs_mark_sent(self, incident_id: str, revision_hash: str) -> None:
-        with self._lock:
+        with self.transaction("rfs_mark_sent"):
             self._conn.execute(
                 "UPDATE rfs_incidents SET last_sent_hash = ? WHERE incident_id = ?",
                 (revision_hash, incident_id),
@@ -1077,7 +1120,7 @@ class Database:
             ).fetchone()
 
     def rfs_recover_queued(self) -> int:
-        with self._lock:
+        with self.transaction("rfs_recover_queued"):
             cur = self._conn.execute(
                 "UPDATE service_history SET transmit_status = 'interrupted', "
                 "detail = 'Send interrupted before confirmation; current incident will be retried' "
@@ -1088,7 +1131,7 @@ class Database:
 
     def rfs_missing_after_poll(self, seen_ids: set[str]) -> list[dict]:
         """Advance disappearance counters only after a successful feed fetch."""
-        with self._lock, self._conn:
+        with self.transaction("rfs_missing_after_poll"):
             rows = self._conn.execute("SELECT * FROM rfs_incidents").fetchall()
             missing = [row for row in rows if row["incident_id"] not in seen_ids]
             for row in missing:
@@ -1125,8 +1168,9 @@ class Database:
     # ---- transmit log ---------------------------------------------------
     def begin_transmission(self, channel, text, transport, manual, context=None, retry=False, policy=None, evidence=None):
         """Commit an intent and retry reservation before submitting any radio bytes."""
+        self.flush_deferred()
         row_id, index, total = context if context else (None, None, None)
-        with self._lock:
+        with self.transaction("begin_transmission"):
             cursor = self._conn.execute(
                 "INSERT INTO transmit_log(ts,channel,byte_count,success,manual,text,error,transport,outcome,evidence,service_history_id,part_index,part_total,uncertainty_retry) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (_now(), channel, len(text.encode("utf-8")), None, int(manual), text, "", transport,
@@ -1178,7 +1222,7 @@ class Database:
     def reserve_uncertainty_retry(self, context):
         if not context:
             return
-        with self._lock:
+        with self.transaction("reserve_uncertainty_retry"):
             row = self._conn.execute("SELECT delivery_parts FROM service_history WHERE id=?", (context[0],)).fetchone()
             parts = json.loads(row[0] or "[]") if row else []
             if context[1] < len(parts):
@@ -1186,10 +1230,11 @@ class Database:
                 self._conn.execute("UPDATE service_history SET delivery_parts=? WHERE id=?", (json.dumps(parts), context[0]))
                 self._conn.commit()
 
+    @defer_locked
     def finish_transmission(self, result):
         if result.log_id is None:
             return
-        with self._lock:
+        with self.transaction("finish_transmission"):
             row = self._conn.execute("SELECT * FROM transmit_log WHERE id = ?", (result.log_id,)).fetchone()
             if row is None:
                 return
@@ -1199,7 +1244,7 @@ class Database:
             self._conn.commit()
         if row["service_history_id"] is not None:
             self.record_delivery_part(row["service_history_id"], row["part_index"], row["part_total"], result, result.detail)
-            with self._lock:
+            with self.transaction("finish_transmission"):
                 current = self._conn.execute("SELECT delivery_parts, transmit_status FROM service_history WHERE id=?", (row["service_history_id"],)).fetchone()
             if current and current["transmit_status"] in NOTICE_COMPLETED | {"interrupted"}:
                 parts = json.loads(current["delivery_parts"] or "[]")
@@ -1229,7 +1274,7 @@ class Database:
 
     # ---- errors ---------------------------------------------------------
     def add_error(self, source: str, message: str) -> None:
-        with self._lock:
+        with self.transaction("add_error"):
             self._conn.execute(
                 "INSERT INTO errors(ts, source, message) VALUES (?, ?, ?)",
                 (_now(), source, message),
@@ -1243,14 +1288,14 @@ class Database:
             ).fetchall()
 
     def clear_errors(self) -> int:
-        with self._lock:
+        with self.transaction("clear_errors"):
             cur = self._conn.execute("DELETE FROM errors")
             self._conn.commit()
             return cur.rowcount
 
     # ---- events (dashboard feed) ---------------------------------------
     def add_event(self, level: str, message: str) -> None:
-        with self._lock:
+        with self.transaction("add_event"):
             self._conn.execute(
                 "INSERT INTO events(ts, level, message) VALUES (?, ?, ?)",
                 (_now(), level, message),
@@ -1264,8 +1309,13 @@ class Database:
             ).fetchall()
 
     def close(self) -> None:
+        try:
+            self.flush_deferred()
+        except Exception:
+            logging.getLogger('wx_echo.database').warning('Closing with unsaved delivery evidence; durable submission intents remain', exc_info=True)
         with self._lock:
             try:
+                self._conn.rollback()
                 self._conn.execute("PRAGMA wal_checkpoint(RESTART)")
             finally:
                 self._conn.close()

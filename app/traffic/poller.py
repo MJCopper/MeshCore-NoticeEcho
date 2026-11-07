@@ -1,6 +1,8 @@
 """Live Traffic NSW polling, history decisions, and MeshCore queueing."""
 from __future__ import annotations
 
+from ..polling_runtime import PollWorker
+
 from ..transmission import NOTICE_COMPLETED
 
 from ..notice_selection import evaluate, values_for, saved_values_for
@@ -82,48 +84,24 @@ class TrafficPoller:
         self.last_successful_poll = ""
         self.last_result = "not polled"
         self._councils = None
+        self.worker = PollWorker("traffic", self.db, self, self.event)
 
     def start(self):
-        recovered = self.db.traffic_recover_queued()
-        if recovered:
-            logger.warning("Recovered %s interrupted traffic sends", recovered)
-        self.task = asyncio.create_task(self._run(), name="traffic-poller")
+        self.task = self.worker.start(self._run)
 
     async def stop(self):
-        if self.task:
-            self.task.cancel()
-            try:
-                await self.task
-            except asyncio.CancelledError:
-                pass
+        await self.worker.stop()
 
     def poke(self):
         self._poke_generation += 1
         self.event.set()
 
     async def _run(self):
-        while True:
-            generation = self._poke_generation
-            try:
-                await self.poll_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("Traffic poll failed")
-                self.last_poll = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                self.last_result = f"error: {exc}"
-                self.db.add_error("traffic", str(exc))
-            if self._poke_generation != generation:
-                continue
-            self.event.clear()
-            try:
-                interval = polling_seconds(self.db.get_setting("traffic_poll_minutes", 5), 5)
-                self.next_poll_at = datetime.fromtimestamp(time.time() + interval, timezone.utc).isoformat()
-                await asyncio.wait_for(self.event.wait(), interval)
-            except asyncio.TimeoutError:
-                pass
+        await self.worker.loop(self.poll_once, lambda: self._poke_generation, recover=self.db.traffic_recover_queued)
 
     async def poll_once(self, *, replay_items=None, force=False):
+        if hasattr(self.db, 'flush_deferred'):
+            self.db.flush_deferred()
         async with self._poll_lock:
             started = time.monotonic()
             try:
