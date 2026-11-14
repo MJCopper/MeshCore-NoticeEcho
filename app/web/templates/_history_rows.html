@@ -13,6 +13,12 @@
   <div class="rec-event">{% if r.rfs_display %}{{ r.rfs_display.heading }}{% else %}{% if r.metadata.level %}{{ r.metadata.level }} · {% endif %}{{ r.title }}{% endif %}</div>
   {% if r.rfs_display %}<p class="hint">Alert level: {{ r.rfs_display.alert_level }} · Incident status: {{ r.rfs_display.status }}</p>{% endif %}
   {% if r.metadata.bom_episode %}<p class="hint">BOM episode #{{ r.metadata.bom_episode.reference }} · {{ r.metadata.bom_episode.mode }} · {{ r.metadata.bom_episode.scope or 'Scope not recorded' }}{% if r.metadata.bom_episode.closure_reason %} · {{ r.metadata.bom_episode.closure_reason }}{% endif %}</p>{% endif %}
+  {% if r.metadata.bom_scope %}<details><summary>BOM geographic scope decision</summary>
+    <p>{{ r.metadata.bom_scope.reason }} · {{ r.metadata.bom_scope.comparison }}</p>
+    {% for area in r.metadata.bom_scope.active %}<p>Active selected scope: {{ area.label }}</p>{% endfor %}
+    {% for area in r.metadata.bom_scope.cancel %}<p>Cancelled announced scope: {{ area.label }}</p>{% endfor %}
+    {% if r.metadata.bom_scope.uncertain %}<p class="hint">Changes cannot be completely separated by geographic scope. Updates retain conservative whole-warning comparison.</p>{% endif %}
+  </details>{% endif %}
   <div class="rec-msgrow">
     <div class="rec-msgwrap">
       <div class="rec-lbl">Prepared message</div>

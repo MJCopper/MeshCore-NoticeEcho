@@ -30,6 +30,7 @@ from .config import (
 )
 from .dedupe import Decision, decide
 from .bom_episodes import destination, full_cancellation, AnnouncementExists
+from .bom_scope import ScopeStore, attach_parts
 from .delivery import permanently_unsendable, queue_refusal, record_part, remaining_parts, submit_notice, recovery_parts, RecoveryBlocked
 from .filters import FilterRules, should_include
 from .brief import brief_bom_parts, NoticeTooLong
@@ -243,7 +244,7 @@ class BomPoller:
             decision = Decision("update", True, "newly selected BOM geographic coverage")
         render_alert = alert
         prior = self._db.get_state(alert.alert_id)
-        if not geography.included and prior and prior["disposition"] in ("sent", "update"):
+        if not geography.included and prior and prior["disposition"] in ("sent", "update") and not getattr(self._db, "bom_episodes", None):
             cancelled_scope = cancellation_only(alert)
             if cancelled_scope:
                 render_alert = cancelled_scope
@@ -293,32 +294,52 @@ class BomPoller:
         episode = None
         episode_record = None
         episode_metadata = None
+        scoped = None
+        material_hash = alert.content_hash()
         if episode_store is not None:
             episode = episode_store.observe(alert) if observe else episode_store.lookup(alert)
             mode = getattr(self._db, "_bom_preview_mode", "dry-run" if dry_run else "live")
             audience = destination(settings, channel)
             allow_content_match = not (expanded and not geographic_active(settings))
+            if episode:
+                scoped = ScopeStore(self._db).plan(episode, mode, audience, alert, geography, settings,
+                                                   observe=observe, force=force and getattr(self._db, '_bom_preview_resend', True))
+                render_alert = scoped['render']
+                item['bom_scope'] = scoped['evidence']
+                material_hash = scoped['evidence']['fingerprint']
+                revision_hash += ':' + material_hash[:16]
+                if scoped['blocked'] or (eligible and scoped['unchanged'] and not force):
+                    item.update(selection='included' if eligible else 'excluded',
+                                selection_reason=scoped['evidence']['reason'] if scoped['blocked'] else 'No selected-area or shared warning content changed')
+                    return False
             episode_record, introduced = episode_store.announcement(episode, mode, audience, revision_hash,
                                                                    allow_content_match=allow_content_match,
-                                                                   material_hash=alert.content_hash())
+                                                                   material_hash=material_hash, scoped=True)
+            if scoped:
+                introduced = scoped['state']['ever_introduced']
+                if not episode_record and eligible and not force:
+                    legacy, _ = episode_store.announcement(episode, mode, audience, revision_hash,
+                                                           material_hash=alert.content_hash())
+                    if legacy and legacy['state'] in NOTICE_COMPLETED | {'dry-run'}:
+                        legacy_meta=json.loads(legacy['metadata'] or '{}')
+                        if not legacy_meta.get('bom_scope') and legacy['history_revision'].split(':')[1:2]==[coverage_hash]:
+                            item.update(selection='included',selection_reason='Previously announced legacy revision retained without rebroadcast')
+                            return False
             if episode:
                 item["bom_episode"] = dict(id=episode["id"], product=episode["product_key"], reference=episode["reference"],
                                            sequence=episode["sequence"], action=episode_record["action"] if episode_record else action,
                                            mode=mode, destination=audience, state=episode["state"], closure_reason=episode["closure_reason"],
                                            provenance=episode_record["provenance"] if episode_record else "observed")
-            if introduced and not geography.included and not full_cancellation(alert):
-                cancelled_scope = cancellation_only(alert)
-                if cancelled_scope:
-                    render_alert = cancelled_scope
-                    decision = Decision("cancelled", True, "Cancellation-only update for an introduced episode's selected scope")
-            terminal = full_cancellation(alert) or decision.disposition == "cancelled"
+            if scoped and scoped['cancel']:
+                decision = Decision('cancelled', True, scoped['evidence']['reason'])
+            terminal = bool(scoped and scoped['terminal']) or full_cancellation(alert)
             requested_resend = force and getattr(self._db, "_bom_preview_resend", True)
             original_latest = latest
             if episode_record and episode_record["history_id"] is not None:
                 with self._db._lock:
                     latest = self._db._conn.execute("SELECT * FROM service_history WHERE id=?", (episode_record["history_id"],)).fetchone()
                 if (latest is not None and episode_record["state"] in ("failed", "interrupted", "deferred")
-                        and episode_record["material_hash"] == alert.content_hash()
+                        and episode_record["material_hash"] == material_hash
                         and latest["revision_hash"].partition(":")[2] == revision_hash.partition(":")[2]
                         and (not force or episode_record["state"] == "deferred")):
                     revision_hash = latest["revision_hash"]
@@ -336,9 +357,10 @@ class BomPoller:
             if not episode:
                 decision = Decision("filtered", False, "BOM warning has expired" if expired else "No established BOM episode; poll for current episode evidence")
             elif terminal:
-                cancellation_detail = "Cancellation of introduced BOM episode" if full_cancellation(alert) else "Cancellation-only update for introduced episode's selected areas"
-                decision = Decision("cancelled" if introduced else "filtered", introduced, cancellation_detail if introduced else "Cancellation of episode never introduced to this destination")
-                action = "RESEND" if requested_resend and introduced else "CANCELLED"
+                cancellation_allowed = bool(scoped and scoped['cancel'])
+                cancellation_detail = scoped['evidence']['reason'] if scoped else 'No established local scope'
+                decision = Decision('cancelled' if cancellation_allowed else 'filtered', cancellation_allowed, cancellation_detail)
+                action = 'RESEND' if requested_resend and cancellation_allowed else 'CANCELLED'
             elif eligible:
                 action = "RESEND" if requested_resend else "UPDATE" if introduced else "NEW"
                 decision = Decision("update" if action in ("UPDATE", "RESEND") else "sent", True,
@@ -348,13 +370,22 @@ class BomPoller:
                 latest = original_latest
             if not decision.transmit:
                 selection = "excluded"
+                if scoped:
+                    geographic_reason = geography.reason
+                    coverage_detail = '' if geography.reason==decision.detail else '; '+geography.reason
+                    area_detail = coverage_detail + f'; council match: {match.status}'
                 item.update(selection=selection, selection_reason=decision.detail)
             else:
                 selection = "included"
                 if decision.disposition == "cancelled":
-                    geographic_reason = "Included: cancellation of introduced BOM episode"
+                    geographic_reason = "Included: cancellation of previously announced selected areas"
                     coverage_detail = "; " + geographic_reason
                     area_detail = coverage_detail + f"; council match: {match.status}" + (f" ({', '.join(match.councils)})" if match.councils else "") + (f" via {match.method}" if match.method else "")
+                    if geographic_active(settings):
+                        effective_coverage=dict(item['geographic_coverage'])
+                        effective_coverage.update(provider_current_included=effective_coverage.get('included',False),
+                                                  included=True,method='announced local scope',reason=geographic_reason)
+                        item['geographic_coverage']=effective_coverage
                 item.update(selection=selection, selection_reason=decision.detail + coverage_detail)
             if episode_record and episode_record["state"] in ("failed", "interrupted", "deferred") and (not force or episode_record["state"] == "deferred"):
                 action = episode_record["action"] if episode_record["action"] != "UNKNOWN" else action
@@ -371,7 +402,8 @@ class BomPoller:
             if parts is None:
                 parts = brief_bom_parts(
                     render_alert, tz_name, action, budget,
-                    geographic_settings=settings, geographic_coverage=geography,
+                    geographic_settings=None if scoped and scoped['evidence']['uncertain'] else settings,
+                    geographic_coverage=geography,
                     scope_evidence=scope_evidence, episode_reference=episode["reference"] if episode else None,
                     cancellation=decision.disposition == "cancelled")
             elif episode_metadata is not None:
@@ -412,6 +444,8 @@ class BomPoller:
                            + (f" via {match.method}" if match.method else ""))
             parts = []
         logged_text = " || ".join(parts)
+        if scoped:
+            attach_parts(scoped['evidence'], parts)
 
         if permanently_unsendable(latest, revision_hash, logged_text):
             return False
@@ -445,7 +479,7 @@ class BomPoller:
             if episode_store is None and not refreshed_preview and latest is not None and disposition == "sent":
                 disposition = "update"
             reservation = dict(episode=episode, mode=mode, audience=audience, revision=revision_hash, action=action,
-                               force=force and not retry_existing, material_hash=alert.content_hash(),
+                               force=force and not retry_existing, material_hash=material_hash,
                                allow_content_match=allow_content_match) if episode is not None and decision.transmit else None
             try:
                 history_id = self._db.add_history(
@@ -453,7 +487,7 @@ class BomPoller:
                     history_text, detail, transmit_status=transmit_status,
                     revision_hash=revision_hash,
                     **({"bom_announcement": reservation} if reservation else {}),
-                    metadata={"bom_episode": episode_metadata, "notice_selection": item["notice_selection"], "provider_classification": {key: getattr(enrichment, key, "") for key in ("severity", "urgency", "certainty")}, "region": "NSW", "council_match": match.status,
+                    metadata={"bom_scope": scoped["evidence"] if scoped else None, "bom_episode": episode_metadata, "notice_selection": item["notice_selection"], "provider_classification": {key: getattr(enrichment, key, "") for key in ("severity", "urgency", "certainty")}, "region": "NSW", "council_match": match.status,
                               "matched_councils": list(match.councils),
                               "match_method": match.method, "selection": selection,
                               "match_reason": match.reason, "enrichment_status": item["enrichment_status"],
@@ -484,7 +518,7 @@ class BomPoller:
             return False
         if episode_store is not None and episode is not None:
             if not episode_store.register(episode, mode, audience, revision_hash, action, history_id,
-                                          force=force and not retry_existing, material_hash=alert.content_hash(),
+                                          force=force and not retry_existing, material_hash=material_hash,
                                           allow_content_match=allow_content_match):
                 self._db.update_history_transmit_status(history_id, "not_attempted", "Duplicate BOM episode announcement reservation")
                 return False
@@ -529,6 +563,8 @@ class BomPoller:
 
         def valid_if():
             current = self._db.all_settings()
+            if scoped and scoped['evidence']['cancel'] and not current.get('bom_send_cancellations', True):
+                return False
             if episode is not None and destination(current, int(current.get("meshcore_channel", 0))) != audience:
                 return False
             if episode is not None and decision.disposition != "cancelled":
@@ -539,8 +575,10 @@ class BomPoller:
             latest_now = self._db.latest_history(alert.alert_id)
             if not current.get("bom_enabled", True) or not latest_now or latest_now["revision_hash"] != revision_hash:
                 return False
+            if scoped and not ScopeStore(self._db).valid(scoped['evidence'], episode, mode, audience, current):
+                return False
             if decision.disposition == "cancelled":
-                return True
+                return bool(current.get('bom_send_cancellations', True))
             if expiry is not None and expiry.tzinfo is not None and expiry <= datetime.now(timezone.utc):
                 return False
             snapshots = self._db.bom_snapshot_regions(["NSW"])

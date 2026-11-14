@@ -24,6 +24,7 @@ from typing import Any, Optional
 from .config import DEFAULT_SETTINGS, STATE_EXPIRY_HOURS
 from . import catalogue
 from . import bom_episodes
+from . import bom_scope
 from .database_runtime import BUSY_MILLISECONDS, Contention, filesystem, defer_locked
 
 SCHEMA = """
@@ -205,6 +206,7 @@ def _now() -> str:
 
 SCHEMA += catalogue.SCHEMA
 SCHEMA += bom_episodes.SCHEMA
+SCHEMA += bom_scope.SCHEMA
 
 
 class Database:
@@ -234,6 +236,7 @@ class Database:
         bom_episodes.upgrade_delivery_trigger(self)
         self.bom_episodes = bom_episodes.Episodes(self)
         self.bom_episodes.bootstrap()
+        bom_scope.bootstrap(self)
 
     @contextmanager
     def transaction(self, operation):
@@ -649,6 +652,11 @@ class Database:
             if bom_announcement is not None:
                 if not self.bom_episodes._register(self._conn, history_id=cur.lastrowid, **bom_announcement):
                     raise bom_episodes.AnnouncementExists()
+                evidence = (metadata or {}).get('bom_scope')
+                if evidence:
+                    self._conn.execute("INSERT INTO bom_scope_events(episode_id,mode,destination,kind,identity,payload,history_id) VALUES (?,?,?,'announcement',?,?,?)",
+                                       (bom_announcement['episode']['id'],bom_announcement['mode'],bom_announcement['audience'],
+                                        str(cur.lastrowid),json.dumps(evidence),cur.lastrowid))
             self._conn.commit()
             return cur.lastrowid
 

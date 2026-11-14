@@ -61,6 +61,7 @@ def fingerprint(db, sources):
     values['state'] = rows(db, 'SELECT * FROM alert_state ORDER BY alert_id')
     values['bom_episodes'] = rows(db, 'SELECT * FROM bom_episodes ORDER BY id')
     values['bom_announcements'] = rows(db, 'SELECT * FROM bom_announcements ORDER BY id')
+    values['bom_scope_events'] = rows(db, 'SELECT * FROM bom_scope_events ORDER BY id')
     values['bom_products'] = rows(db, 'SELECT * FROM bom_products ORDER BY product_key')
     values['bom_aliases'] = rows(db, 'SELECT * FROM bom_product_aliases ORDER BY provider_id')
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()

@@ -61,7 +61,7 @@ def saved_decisions(db, settings, sources=("bom", "rfs", "traffic"), *, listing_
         alert.warning_summary = row["warning_summary"]
         alert.warning_sections = tuple(WarningSection(**s) for s in json.loads(row["warning_sections"] or "[]"))
         match = CouncilMatch(row["council_match"], tuple(json.loads(row["matched_councils"] or "[]")))
-        coverage = bom_delivery_coverage(alert, match, settings, coverage_db, SimpleNamespace(**item.get("_enrichment", {})))
+        coverage = bom_delivery_coverage(alert, match, settings, db, SimpleNamespace(**item.get("_enrichment", {})))
         result.append(dict(source="bom", id=row["alert_id"], title=row["headline"], coverage=coverage))
     for service, table, cls, identity in (("rfs", "rfs_incidents", Incident, "incident_id"),
                                           ("traffic", "traffic_items", TrafficItem, "item_id")):

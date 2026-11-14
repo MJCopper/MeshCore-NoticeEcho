@@ -222,7 +222,7 @@ class Episodes:
             conn.execute('UPDATE bom_episodes SET missing_polls=?,snapshot_id=?,state=?,closed_at=?,closure_reason=? WHERE id=?',
                          (missing, snapshot_id, 'closed' if reason else 'open', stamp if reason else None, reason, episode['id']))
 
-    def announcement(self, episode, mode, audience, revision, *, allow_content_match=True, material_hash=""):
+    def announcement(self, episode, mode, audience, revision, *, allow_content_match=True, material_hash="", scoped=False):
         if not episode:
             return None, False
         with self.db._lock:
@@ -230,7 +230,7 @@ class Episodes:
                                        'FROM bom_announcements a LEFT JOIN service_history h ON h.id=a.history_id '
                                        "WHERE a.episode_id=? AND a.mode=? AND a.destination=? AND a.revision_hash=? ORDER BY a.id DESC LIMIT 1",
                                        (episode['id'], mode, audience, revision)).fetchone()
-            if row is None and allow_content_match:
+            if row is None and allow_content_match and not scoped:
                 # Coverage-setting changes do not resend an unchanged provider
                 # revision already introduced to this same audience and mode.
                 row = self.db._conn.execute('SELECT a.*,h.transmitted_text,h.delivery_parts,h.detail,h.disposition,h.metadata,h.revision_hash AS history_revision '

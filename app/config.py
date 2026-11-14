@@ -107,6 +107,7 @@ DEFAULT_SETTINGS: dict = {
     "rfs_notice_selection": None,
     "traffic_notice_selection": None,
     "bom_enabled": True,
+    "bom_send_cancellations": True,
     "bom_all_councils": True,
     "bom_councils": [],
     "bom_include_unknown_councils": True,

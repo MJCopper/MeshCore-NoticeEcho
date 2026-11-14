@@ -226,7 +226,8 @@ async def test_mixed_warning_sends_only_cancellation_for_previously_sent_product
     radio=Radio()
     from app.bom_episodes import destination
     episode = db.bom_episodes.observe(Alert.from_bom(item))
-    introduction = db.add_history("mixed", "Flood Warning", "Hunter", "sent", "Earlier warning", transmit_status="success")
+    introduction = db.add_history("mixed", "Flood Warning", "Hunter", "sent", "Earlier warning", transmit_status="success",
+                                  metadata={'matched_districts':['Hunter'],'selected_districts':['Hunter'],'all_councils':False})
     db.bom_episodes.register(episode, "live", destination(db.all_settings(), 0), "previous", "NEW", introduction)
     poller=BomPoller(db,radio)
     await poller._process(item,FilterRules([],["Warning"],[]),"Australia/Sydney",0,False)

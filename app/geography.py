@@ -309,9 +309,23 @@ def traffic_delivery_coverage(item, council, settings, db):
 
 def bom_delivery_coverage(alert, match, settings, db, enrichment=None):
     from .bom_geography import cancellation_only
+    from .bom_episodes import full_cancellation, destination
+    from .bom_scope import ScopeStore
     coverage = bom_coverage(alert, match, settings, enrichment)
-    terminal = alert.message_type == "Cancel" or (not coverage.included and cancellation_only(alert) is not None)
-    return closure_coverage(coverage, db, "bom", alert.alert_id, terminal, alert.references)
+    terminal = full_cancellation(alert) or (not coverage.included and cancellation_only(alert) is not None)
+    if not terminal:
+        return coverage
+    if hasattr(db,'bom_episodes'):
+        episode=db.bom_episodes.lookup(alert)
+        if episode:
+            mode=getattr(db,'_bom_preview_mode','dry-run' if settings.get('dry_run',True) else 'live')
+            plan=ScopeStore(db).plan(episode,mode,destination(settings,int(settings.get('meshcore_channel',0))),
+                                    alert,coverage,settings,observe=False,readonly=True)
+            if terminal:
+                return replace(coverage,included=plan['cancel'],method='announced local scope',reason=plan['evidence']['reason'])
+    if terminal:
+        return replace(coverage,included=False,reason='No established announced local scope for cancellation')
+    return coverage
 
 
 def saved_evidence(item, row):

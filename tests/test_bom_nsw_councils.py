@@ -149,7 +149,7 @@ async def test_expanding_selected_councils_reconsiders_previously_sent_warning()
 
 
 @pytest.mark.asyncio
-async def test_cancellation_of_sent_warning_is_not_lost_when_area_is_unknown():
+async def test_cancellation_without_announced_selected_scope_is_filtered():
     db = Database(":memory:")
     db.set_setting("bom_all_councils", False)
     db.set_setting("bom_councils", ["Tamworth Regional"])
@@ -167,6 +167,7 @@ async def test_cancellation_of_sent_warning_is_not_lost_when_area_is_unknown():
     await poller._process(item, FilterRules([], ["Warning"], []),
                           "Australia/Sydney", 0, True)
     row = db.latest_history("cancel")
-    assert row["disposition"] == "cancelled"
-    assert row["transmit_status"] == "dry-run"
+    assert row["disposition"] == "filtered"
+    assert row["transmit_status"] is None
+    assert 'selected scope' in row['detail']
     db.close()

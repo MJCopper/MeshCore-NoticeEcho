@@ -176,7 +176,7 @@ def test_traffic_parser_preserves_interstate_coordinates_and_provider_state():
     assert not traffic_coverage(item,'',{KEY:configuration(all_nsw=True,include_uncertain=True)}).included
 
 
-def test_bom_cancellation_diagnostics_follow_referenced_sent_warning():
+def test_bom_cancellation_diagnostics_require_announced_selected_scope():
     from app.models import Alert
     from app.bom_area import CouncilMatch
     from app.geography import bom_delivery_coverage
@@ -185,8 +185,8 @@ def test_bom_cancellation_diagnostics_follow_referenced_sent_warning():
                     disposition='sent',sent_ts='2026-10-05T00:00:00Z')
     item=Alert('cancel','Flood Warning','','Hunter','','','Cancel',references=['previous'])
     result=bom_delivery_coverage(item,CouncilMatch('unknown'),{KEY:configuration(location_terms=['Elsewhere'])},db)
-    assert result.included and result.method=='previous transmission'
-    assert 'cancellation' in result.reason
+    assert not result.included
+    assert 'announced local scope' in result.reason
     db.close()
 
 

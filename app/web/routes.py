@@ -634,6 +634,7 @@ async def bom_settings_page(request: Request):
 @router.post("/settings/bom")
 async def save_bom_settings(request: Request, poll_interval: int = Form(...),
                             bom_enabled: str = Form(""),
+                            bom_send_cancellations: str = Form(""),
                             bom_all_councils: str = Form(""),
                             bom_councils: list[str] = Form(default=[]),
                             bom_include_unknown_councils: str = Form(""),
@@ -641,6 +642,8 @@ async def save_bom_settings(request: Request, poll_interval: int = Form(...),
                             all_warnings: str = Form(""), warning_choices_submitted: str = Form("")):
     db = _db(request)
     db.set_setting("bom_enabled", bool(bom_enabled))
+    if (await request.form()).get('cancellation_setting_submitted') == '1':
+        db.set_setting('bom_send_cancellations', bool(bom_send_cancellations))
     # Geographic controls live on the universal page. Ignore legacy form fields.
 
     minutes = max(MIN_POLL_MINUTES, int(poll_interval))

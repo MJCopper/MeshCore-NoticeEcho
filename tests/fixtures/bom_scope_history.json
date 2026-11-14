@@ -1,0 +1,201 @@
+{
+  "provenance": "Saved development History evidence. Tests reconstruct provider payloads; original raw revisions are not retained.",
+  "records": [
+    {
+      "id": 20251,
+      "ts": "2026-11-14T02:38:39+00:00",
+      "text": "1/2 BOM NEW #2331-L Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding for Tamworth, || 2/2 Quirindi, Gunnedah, Coonabarabran, Goodooga, Baradine; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "NEW",
+      "matches": [
+        [
+          "Tamworth",
+          "affected area"
+        ],
+        [
+          "Quirindi",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 20271,
+      "ts": "2026-11-14T03:29:11+00:00",
+      "text": "BOM CANCELLED #2331-L Severe Thunderstorm Warning for the North West Slopes, Plains district; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 20360,
+      "ts": "2026-11-14T05:50:47+00:00",
+      "text": "BOM CANCELLED #2331-L Severe Thunderstorm Warning for the Mid North Coast district; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 20448,
+      "ts": "2026-11-14T08:42:59+00:00",
+      "text": "BOM CANCELLED #2331-L Severe Thunderstorm Warning for the Central West Slopes, Plains district; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 20487,
+      "ts": "2026-11-14T09:53:54+00:00",
+      "text": "1/2 BOM CANCELLED #2331-L Severe Thunderstorm Warning for the Mid North Coast, North West Slopes, Plains, || 2/2 Upper Western districts; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 20501,
+      "ts": "2026-11-14T10:24:22+00:00",
+      "text": "BOM CANCELLED #2331-L Severe Thunderstorm Warning for the Central Tablelands district; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 20524,
+      "ts": "2026-11-14T11:15:08+00:00",
+      "text": "BOM CANCELLED #2331-L Severe Thunderstorm Warning for Illawarra, Southern Tablelands Forecast Districts; check bom.gov.au",
+      "episode": "2331-L",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 19729,
+      "ts": "2026-11-13T03:11:28+00:00",
+      "text": "1/2 BOM NEW #2331-J Severe Thunderstorm Warning: Risk: heavy rain, flash flooding for Armidale, Tenterfield, Glen Innes, || 2/2 Tabulam, Urbenville, Liston; check bom.gov.au",
+      "episode": "2331-J",
+      "action": "NEW",
+      "matches": [
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 19850,
+      "ts": "2026-11-13T06:14:15+00:00",
+      "text": "BOM CANCELLED #2331-J Severe Thunderstorm Warning for the Illawarra, Southern Tablelands districts; check bom.gov.au",
+      "episode": "2331-J",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 19898,
+      "ts": "2026-11-13T07:05:22+00:00",
+      "text": "BOM CANCELLED #2331-J Severe Thunderstorm Warning for the Northern Rivers, Northern Tablelands districts; check bom.gov.au",
+      "episode": "2331-J",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 19950,
+      "ts": "2026-11-13T07:56:26+00:00",
+      "text": "1/2 BOM CANCELLED #2331-J Severe Thunderstorm Warning for the Metropolitan, Central Tablelands, || 2/2 North West Slopes, Plains districts; check bom.gov.au",
+      "episode": "2331-J",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 19977,
+      "ts": "2026-11-13T08:37:18+00:00",
+      "text": "BOM CANCELLED #2331-J Severe Thunderstorm Warning for Mid North Coast, Hunter Forecast Districts; check bom.gov.au",
+      "episode": "2331-J",
+      "action": "CANCELLED",
+      "matches": []
+    },
+    {
+      "id": 14224,
+      "ts": "2026-11-03T02:29:45+00:00",
+      "text": "1/3 BOM UPDATE #2331-F Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding; Risk: heavy || 2/3 rain, flash flooding for Armidale, Tamworth, Scone, Nowendoc, Gloucester, Muswellbrook, || 3/3 Goulburn, Bowral, Crookwell, Taralga; check bom.gov.au",
+      "episode": "2331-F",
+      "action": "UPDATE",
+      "matches": [
+        [
+          "Tamworth",
+          "affected area"
+        ],
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 14241,
+      "ts": "2026-11-03T03:00:29+00:00",
+      "text": "1/2 BOM UPDATE #2331-F Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding for Armidale, || 2/2 Tamworth, Goulburn, Scone, Inverell, Bowral; check bom.gov.au",
+      "episode": "2331-F",
+      "action": "UPDATE",
+      "matches": [
+        [
+          "Tamworth",
+          "affected area"
+        ],
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 14247,
+      "ts": "2026-11-03T03:10:42+00:00",
+      "text": "1/2 BOM UPDATE #2331-F Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding for Armidale, || 2/2 Grafton, Goulburn, Nowra, Bowral, Glen Innes; check bom.gov.au",
+      "episode": "2331-F",
+      "action": "UPDATE",
+      "matches": [
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 14262,
+      "ts": "2026-11-03T03:41:24+00:00",
+      "text": "1/2 BOM UPDATE #2331-F Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding for Armidale, || 2/2 Grafton, Goulburn, Scone, Tenterfield, Katoomba; check bom.gov.au",
+      "episode": "2331-F",
+      "action": "UPDATE",
+      "matches": [
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 14281,
+      "ts": "2026-11-03T04:01:51+00:00",
+      "text": "1/2 BOM UPDATE #2331-F Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding for Armidale, || 2/2 Grafton, Goulburn, Nowra, Scone, Tenterfield; check bom.gov.au",
+      "episode": "2331-F",
+      "action": "UPDATE",
+      "matches": [
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    },
+    {
+      "id": 14287,
+      "ts": "2026-11-03T04:22:20+00:00",
+      "text": "1/3 BOM UPDATE #2331-F Severe Thunderstorm Warning: Risk: damaging winds, large hail, heavy rain, flash flooding; Risk: || 2/3 destructive winds, giant hail, heavy rain, flash flooding for Armidale, Grafton, Goulburn, Nowra, Scone, Tenterfield, || 3/3 Inverell, Glen Innes, Woodenbong, Baryulgil, Jackadgery; check bom.gov.au",
+      "episode": "2331-F",
+      "action": "UPDATE",
+      "matches": [
+        [
+          "Armidale",
+          "affected area"
+        ]
+      ]
+    }
+  ]
+}

@@ -54,7 +54,9 @@ async def test_fixed_link_revisions_reach_history_and_dashboard(tmp_path, monkey
             return parse_rss(raw), raw
 
     async def _enrich(reference):
-        return SimpleNamespace(locations="", summary="")
+        # The third revision changes warning coverage. Publication metadata
+        # alone is intentionally no longer a delivery-worthy change.
+        return SimpleNamespace(locations="Hunter Coast" if feeds else "Sydney Coast", summary="")
 
     monkeypatch.setattr("app.poller.BOMClient", _BOMClient)
     monkeypatch.setattr(poller._enricher, "enrich", _enrich)

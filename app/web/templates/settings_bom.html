@@ -7,7 +7,11 @@
 {% include "_geographic_summary.html" %}
 <form id="service-settings" method="post" action="/settings/bom">
 <input type="hidden" name="preserve_notice_selection" value="1">
+<input type="hidden" name="cancellation_setting_submitted" value="1">
 <div class="panel"><h3>Monitoring</h3><label class="chk"><input type="checkbox" name="bom_enabled" value="1" {% if s.bom_enabled %}checked{% endif %}> Enable BOM monitoring</label></div>
+<div class="panel"><h3>Cancellation notifications</h3>
+<label class="chk"><input type="checkbox" name="bom_send_cancellations" value="1" {% if s.get('bom_send_cancellations', True) %}checked{% endif %}> Send cancellation notifications</label>
+<p class="hint">Send full-warning and selected-area cancellations only for coverage previously announced to this destination. Turning this off also removes cancellation sections from mixed updates. Active NEW and UPDATE notifications and lifecycle tracking continue.</p></div>
 </form>
 {% include "_notice_selection_settings.html" %}
 <div class="panel"><h3>Polling</h3><label>Poll interval (minutes, minimum 5)</label>

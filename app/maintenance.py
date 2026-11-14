@@ -29,10 +29,12 @@ DEFAULTS = {"maintenance_enabled": True, "maintenance_history_days": 90,
             "maintenance_backup_keep": 7}
 TABLES = ("settings", "service_history", "transmit_log", "errors", "events",
           "bom_current", "alert_state", "rfs_incidents", "traffic_items", "history", "rfs_history",
-          "source_catalogue", "source_snapshots", "bom_products", "bom_product_aliases", "bom_episodes", "bom_announcements")
+          "source_catalogue", "source_snapshots", "bom_products", "bom_product_aliases", "bom_episodes", "bom_announcements", "bom_scope_events")
 PENDING = "('queued','deferred','failed','interrupted')"
+SCOPE_PROTECTION = ' OR id IN (SELECT history_id FROM bom_scope_events WHERE history_id IS NOT NULL)'
 # Keep identity anchors even after stale current records leave the snapshot.
 PROTECTED = f"""COALESCE(transmit_status,'') IN {PENDING}
+ {SCOPE_PROTECTION}
  OR NOT EXISTS (SELECT 1 FROM service_history n WHERE n.source=service_history.source AND n.external_id=service_history.external_id AND n.id>service_history.id)
  OR (transmit_status IS NOT NULL AND NOT EXISTS (SELECT 1 FROM service_history n WHERE n.source=service_history.source AND n.external_id=service_history.external_id AND n.id>service_history.id AND n.transmit_status IS NOT NULL))
  OR (COALESCE(transmit_status,'') IN {sql_states(NOTICE_COMPLETED)} AND NOT EXISTS (SELECT 1 FROM service_history n WHERE n.source=service_history.source AND n.external_id=service_history.external_id AND n.id>service_history.id AND n.transmit_status IN {sql_states(NOTICE_COMPLETED)}))
@@ -77,8 +79,10 @@ def storage(db):
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
         pages = conn.execute("PRAGMA page_count").fetchone()[0]
         free = conn.execute("PRAGMA freelist_count").fetchone()[0]
-        counts = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in TABLES}
-        protected = conn.execute(f"SELECT COUNT(*) FROM service_history WHERE {PROTECTED}").fetchone()[0]
+        existing = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        counts = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in TABLES if table in existing}
+        protection = PROTECTED if 'bom_scope_events' in existing else PROTECTED.replace(SCOPE_PROTECTION,'')
+        protected = conn.execute(f"SELECT COUNT(*) FROM service_history WHERE {protection}").fetchone()[0]
     return {"database_bytes": path.stat().st_size if path.is_file() else 0,
             "wal_bytes": Path(str(path)+"-wal").stat().st_size if Path(str(path)+"-wal").is_file() else 0,
             "logical_bytes": pages*page_size, "reusable_bytes": free*page_size,
@@ -135,6 +139,9 @@ def clean(db, settings):
     cutoff = lambda days: (now-timedelta(days=days)).isoformat(timespec="seconds")
     stale = cutoff(settings["maintenance_stale_days"])
     queries = {
+        'bom_scope_events': (f"EXISTS (SELECT 1 FROM bom_episodes e WHERE e.id=bom_scope_events.episode_id AND e.state='closed' AND e.closed_at<?) "
+                             f"AND NOT EXISTS (SELECT 1 FROM bom_announcements a JOIN service_history h ON h.id=a.history_id WHERE a.episode_id=bom_scope_events.episode_id AND h.transmit_status IN {PENDING})",
+                             (cutoff(settings['maintenance_history_days']),)),
         "bom_announcements": (f"created<? AND state NOT IN {PENDING} AND state!='submitting' "
                               "AND EXISTS (SELECT 1 FROM bom_episodes e WHERE e.id=bom_announcements.episode_id AND e.state='closed') "
                               f"AND NOT EXISTS (SELECT 1 FROM service_history h WHERE h.id=bom_announcements.history_id AND h.transmit_status IN {PENDING})",
@@ -156,6 +163,7 @@ def clean(db, settings):
     # Cheap retention predicates keep recent rows out of the scan budget. Full
     # protection is rechecked inside each write transaction below.
     scans = {
+        'bom_scope_events': ('1=1', ()),
         'bom_announcements': ('created<?', (cutoff(settings['maintenance_history_days']),)),
         'source_catalogue': ('present=0 AND missing_polls>=2 AND last_seen<?', (stale,)),
         'rfs_incidents': ('missing_polls>=2 AND last_seen<?', (stale,)),
