@@ -195,7 +195,7 @@ async def test_dry_run_new_update_cancel_new_and_no_false_live_delivery(db):
     count = db._conn.execute('SELECT COUNT(*) FROM service_history').fetchone()[0]
     assert not await process(db, radio)
     assert db._conn.execute('SELECT COUNT(*) FROM service_history').fetchone()[0] == count
-    assert await process(db, radio, warning(headline='Changed storm'))
+    assert await process(db, radio, warning(detail='Destructive winds expected.'))
     assert metadata(db)['action'] == 'UPDATE'
     assert await process(db, radio, warning(message_type='Cancel'))
     assert metadata(db)['action'] == 'CANCELLED' and metadata(db)['reference'] == '2331-A'
@@ -216,7 +216,7 @@ async def test_live_introduction_cancellation_and_changed_destination(db):
     assert not await process(db, radio, dry=False, force=True)  # already queued
     radio.finish()
     assert not await process(db, radio, dry=False)
-    assert await process(db, radio, warning(headline='Changed'), dry=False)
+    assert await process(db, radio, warning(detail='Destructive winds expected.'), dry=False)
     assert metadata(db)['action'] == 'UPDATE'
     radio.finish()
     assert await process(db, radio, warning(message_type='Cancel'), dry=False)
@@ -247,14 +247,14 @@ async def test_deferral_pre_submission_failure_ambiguity_and_resend(db):
     assert await process(db, radio, warning(headline='New revision'), dry=False)
     assert metadata(db)['action'] == 'NEW'
     radio.finish(TxResult('unconfirmed', submitted=True))
-    assert await process(db, radio, warning(headline='Another revision'), dry=False)
+    assert await process(db, radio, warning(headline='Another revision', detail='Destructive winds expected.'), dry=False)
     assert metadata(db)['action'] == 'UPDATE'
     radio.finish()
-    assert await process(db, radio, warning(headline='Another revision'), dry=False, force=True)
+    assert await process(db, radio, warning(headline='Another revision', detail='Destructive winds expected.'), dry=False, force=True)
     assert metadata(db)['action'] == 'RESEND'
     assert 'BOM RESEND #2331-A' in latest(db)['transmitted_text']
     radio.finish()
-    assert not await process(db, radio, warning(headline='Another revision'), dry=False)
+    assert not await process(db, radio, warning(headline='Another revision', detail='Destructive winds expected.'), dry=False)
 
 
 @pytest.mark.asyncio
@@ -389,8 +389,8 @@ async def test_previews_preserve_production_identity_and_use_target_mode(db):
     before={table:[tuple(row) for row in db._conn.execute('SELECT * FROM '+table)] for table in tables}
     episode_before=before['bom_episodes']
     preview=await service.preview('bom','reprocess')
-    assert preview['notices']==1 and not preview['errors']
-    assert 'BOM UPDATE #2331-A' in preview['details'][0]['text']
+    assert preview['notices']==0 and not preview['errors']
+    assert any('no additional information' in entry['reason'] for entry in preview['exclusions'])
     assert {table:[tuple(row) for row in db._conn.execute('SELECT * FROM '+table)] for table in tables}==before
     service.start(preview['token']);await asyncio.wait_for(service.task, 3)
     assert len(radio.notices)==1  # ordinary reprocess preserves completed suppression
@@ -559,7 +559,7 @@ async def test_history_and_transmit_log_render_episode_actions(db):
     from test_source_catalogue import client_for
     radio=Radio()
     await process(db,radio)
-    await process(db,radio,warning(headline='Changed warning'))
+    await process(db,radio,warning(detail='Destructive winds expected.'))
     await process(db,radio,warning(message_type='Cancel'))
     client=client_for(db)
     page=client.get('/history?source=bom')
@@ -614,7 +614,7 @@ async def test_issue_time_only_refresh_does_not_duplicate_material_content(db, d
     total=db._conn.execute('SELECT COUNT(*) FROM bom_announcements').fetchone()[0]
     assert not await process(db,radio,raw | {'effective':'2026-10-26T01:00:00+00:00'},dry=dry)
     assert db._conn.execute('SELECT COUNT(*) FROM bom_announcements').fetchone()[0]==total
-    await process(db,radio,raw | {'headline':'Changed hazard','effective':'2026-10-26T02:00:00+00:00'},dry=dry)
+    await process(db,radio,raw | {'detail':'Destructive winds expected.','effective':'2026-10-26T02:00:00+00:00'},dry=dry)
     assert metadata(db)['action']=='UPDATE'
     if not dry:radio.finish()
     # A real reversion of hazard content is a new revision, not an issue-only refresh.

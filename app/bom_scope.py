@@ -13,6 +13,7 @@ from .geography import KEY, active, contains, normalise, location_matches
 from .bom_geography import cancellation_only
 from .bom_episodes import full_cancellation
 from .transmission import COMPLETED, NOTICE_COMPLETED
+from . import bom_information
 
 VERSION = 1
 # Only recognized, independently named NSW marine zones support proving a
@@ -159,10 +160,11 @@ class ScopeStore:
         if ensure:
             self.ensure(episode,mode,audience)
         with self.db._lock:
-            rows = self.db._conn.execute('SELECT e.*,a.introduced,a.state,h.delivery_parts FROM bom_scope_events e LEFT JOIN bom_announcements a ON a.history_id=e.history_id LEFT JOIN service_history h ON h.id=e.history_id '
+            rows = self.db._conn.execute('SELECT e.*,a.introduced,a.state,h.delivery_parts,h.transmitted_text FROM bom_scope_events e LEFT JOIN bom_announcements a ON a.history_id=e.history_id LEFT JOIN service_history h ON h.id=e.history_id '
                                         'WHERE e.episode_id=? AND e.mode=? AND e.destination=? ORDER BY e.id', (episode['id'],mode,audience)).fetchall()
         known, closed, notified, pending, last_closed, suppressed = {}, {}, set(), set(), {}, set()
         last_fingerprint = ''; observed = {}; incomplete = False; recovering_cancel=set(); ever_introduced=False
+        information = {}; baseline = {}; recovery = None
         for row in rows:
             p = json.loads(row['payload'])
             if row['kind']=='observation':
@@ -171,15 +173,19 @@ class ScopeStore:
                     if key in known and known[key]['token']==token:
                         closed[key]=known.pop(key)
                         last_closed[key]=token
+                        information.pop(key, None); baseline.pop(key, None)
                     if p.get('suppressed') or token in p.get('retired',[]):
                         notified.add(token)
                         suppressed.add(token)
                 continue
             introduced = bool(row['introduced'])
             reserved = row['state'] in ('queued','submitting')
+            if p.get('active'):
+                recovery = p if row['state'] in ('queued','submitting','failed','interrupted','deferred') else None
             if p.get('legacy_close') and introduced:
                 for key,item in list(known.items()):
                     closed[key]=known.pop(key);last_closed[key]=item['token'];notified.add(item['token']);suppressed.add(item['token'])
+                    information.pop(key, None); baseline.pop(key, None)
             if introduced:
                 for item in p.get('active', []):
                     if not part_evidence(p,item,row):
@@ -188,6 +194,12 @@ class ScopeStore:
                     key=item['key']
                     if key not in known:
                         known[key]=dict(item,token=f"{row['id']}:{key}")
+                    parts=json.loads(row['delivery_parts'] or '[]')
+                    complete = row['state'] in NOTICE_COMPLETED | {'dry-run'} or (bool(parts) and all(
+                        part.get('status') in COMPLETED | {'submitting'} or part.get('may_have_transmitted') for part in parts))
+                    saved = p.get('information', bom_information.legacy(p, row))
+                    if complete and key in saved:
+                        information[key]=saved[key]; baseline[key]=row['history_id']
                 if p.get('active'):
                     last_fingerprint=p.get('active_fingerprint',p.get('fingerprint',''))
                     incomplete=row['state'] in ('queued','submitting','failed','interrupted','deferred')
@@ -203,9 +215,11 @@ class ScopeStore:
                     pending.add(token)
         return dict(active=known, closed=closed, notified=notified, pending=pending,
                     last_closed=last_closed, fingerprint=last_fingerprint, observed=observed, incomplete=incomplete,
-                    recovering_cancel=recovering_cancel,ever_introduced=ever_introduced,suppressed=suppressed)
+                    recovering_cancel=recovering_cancel,ever_introduced=ever_introduced,suppressed=suppressed,
+                    information=information,baseline=baseline,recovery=recovery)
 
-    def plan(self, episode, mode, audience, alert, coverage, settings, *, observe=True, force=False, readonly=False):
+    def plan(self, episode, mode, audience, alert, coverage, settings, *, observe=True, force=False, readonly=False,
+             budget=126, tz_name='Australia/Sydney'):
         state=self.state(episode,mode,audience,ensure=not readonly)
         enabled=bool(settings.get('bom_send_cancellations',True))
         whole=full_cancellation(alert)
@@ -281,16 +295,54 @@ class ScopeStore:
         evidence=dict(version=VERSION,active=active_items,cancel=notify,fingerprint=fingerprint,
                       active_fingerprint=active_fingerprint,
                       forced=force,
-                      provider_hash=alert.content_hash(),comparison='structured selected sections' if partitioned else 'conservative whole warning',
+                      provider_hash=alert.content_hash(),comparison=('announced selected scope' if not active_items else
+                          'structured selected sections' if partitioned else 'conservative whole warning'),
                       uncertain=not partitioned,reason=reason,
                       activation=digest([(x['key'],state['last_closed'].get(x['key'],'')) for x in active_items])[:12])
+        unchanged = bool(active_items and not notify and not state['incomplete'] and active_fingerprint==state['fingerprint'])
+        if active_items:
+            from .brief import brief_bom_parts, NoticeTooLong
+            rendered = {}
+            try:
+                brief_bom_parts(render, tz_name, 'UPDATE' if state['ever_introduced'] else 'NEW', budget,
+                                geographic_settings=settings if partitioned else None,
+                                geographic_coverage=coverage, scope_evidence=rendered,
+                                episode_reference=episode['reference'])
+            except NoticeTooLong:
+                # Recover an immutable prepared message before trying to format
+                # it at a changed budget. Recovery itself validates its size.
+                recovery = state['recovery']
+                if (recovery and not notify and recovery.get('provider_hash')==alert.content_hash()
+                        and recovery.get('activation')==evidence['activation']):
+                    evidence.update(recovery)
+                # Otherwise the ordinary formatting-blocked path records it.
+            else:
+                information = bom_information.conveyed(rendered, active_items,
+                                                       routine_expiry=not bool(alert.raw.get('ends')), alert=render)
+                for key, value in information.items():
+                    if not value['facts'] and key in state['information']:
+                        # Omitted local detail is not an explicit all-clear.
+                        value['facts'] = state['information'][key]['facts']
+                changes = [x['key'] for x in active_items if state['information'].get(x['key']) != information[x['key']]]
+                unchanged = bool(not changes and not notify and not state['incomplete'])
+                evidence.update(information_version=bom_information.VERSION, information=information,
+                                baseline=state['baseline'], changed_scopes=changes,
+                                comparison='information conveyed for selected locations',
+                                reason=('Suppressed: no additional information for selected locations' if unchanged else
+                                        'New or changed information for selected locations' if changes else reason))
+                # The comparison identity is independent of unrelated provider
+                # revisions; the transition anchor permits genuine reversions.
+                evidence['active_fingerprint']=digest(information)
+                evidence['fingerprint']=digest([information, state['baseline'],
+                                               [(x['key'],x['token']) for x in notify], evidence['activation']])
+                observation['information']=information
         if observe:
-            observation['active_fingerprint']=active_fingerprint
+            observation['active_fingerprint']=evidence['active_fingerprint']
             with self.db.transaction('BOM scope observation') as conn:
                 conn.execute("INSERT OR IGNORE INTO bom_scope_events(episode_id,mode,destination,kind,identity,payload) VALUES (?,?,?,'observation',?,?)",
                              (episode['id'],mode,audience,digest(observation),json.dumps(observation)))
         return dict(render=render,evidence=evidence,cancel=bool(notify and not active_items),blocked=blocked,
-                    unchanged=bool(active_items and not notify and not state['incomplete'] and active_fingerprint==state['fingerprint']),
+                    unchanged=unchanged,
                     terminal=bool(whole or (cancellation and not active_items)),state=state)
 
     def valid(self, evidence, episode, mode, audience, settings):
@@ -305,8 +357,12 @@ class ScopeStore:
         if observed:
             if any(x['key'] in observed.get('active',[]) for x in evidence.get('cancel',[])):
                 return False
-            if evidence.get('active') and observed.get('active_fingerprint')!=evidence['active_fingerprint']:
-                return False
+            if evidence.get('active'):
+                if evidence.get('information') is not None and observed.get('information') is not None:
+                    if any(observed['information'].get(key)!=value for key,value in evidence['information'].items()):
+                        return False
+                elif observed.get('active_fingerprint')!=evidence['active_fingerprint']:
+                    return False
         return True
 
 

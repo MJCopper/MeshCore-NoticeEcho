@@ -28,13 +28,13 @@ Announcement history is separate for Dry Run and live operation, and for each de
 | Situation | Prepared label |
 |---|---|
 | First eligible announcement of an episode to this mode/destination | NEW |
-| Changed revision of an episode already introduced there | UPDATE |
+| Meaningful new or changed local information conveyed for an episode already introduced there | UPDATE |
 | Cancellation of an episode already introduced there | CANCELLED |
 | Explicit operator resend | RESEND (cancellation content stays visibly CANCELLED) |
 | Ordinary retry or partial recovery | Original recorded wording and action |
-| Unchanged revision or issue-time-only refresh in ordinary polling | No new announcement |
+| No additional conveyed local information, including unrelated changes and issue-only refreshes | No new announcement |
 
-Dry Run records simulated introductions without recording live delivery. Switching to live can therefore produce NEW for the same episode reference. A new destination can also receive NEW. Settings, restarts and mode changes do not create product episodes. Existing geographic-policy rules remain: completed unchanged warnings are not automatically resent by universal coverage changes; legacy council/district expansion retains its existing reconsideration behaviour.
+Dry Run records simulated introductions without recording live delivery. Switching to live can therefore produce NEW for the same episode reference. A new destination can also receive NEW. Settings, restarts and mode changes do not create product episodes. Additional selected coverage can justify an UPDATE when that scope has not been introduced to this audience; unchanged already-announced local information stays suppressed. Legacy council/district expansion retains its existing reconsideration behaviour.
 
 Queue admission alone is not proof of introduction. Capacity deferral or definite failure before transmission leaves the destination eligible for a first NEW. Companion acceptance counts as introduction for the corresponding mode and destination, even when local counter evidence is unavailable. Dry Run acceptance never introduces an episode to Live delivery. Submitted, potentially transmitted or confirmed parts retain conservative duplicate protections. An optional unknown-command retry keeps the same message, reference and packet identity; accepted commands are not retried merely because RF evidence is absent. It is separate from an operator RESEND. Cancellation additionally requires evidence of previously announced selected geographic scope; introducing a product does not authorize cancellations for unrelated areas. See [transmission acceptance and evidence](delivery-evidence.md) and [BOM geographic scope](bom-scope.md).
 

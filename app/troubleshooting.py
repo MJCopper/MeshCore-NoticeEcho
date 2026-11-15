@@ -196,7 +196,8 @@ class Troubleshooting:
                         exclusions.append(dict(source=s,reason='Service disabled',count=len(snapshots[s])))
                         continue
                     start = rows(clone, 'SELECT COALESCE(MAX(id),0) AS id FROM service_history')[0]['id']
-                    # A resend-style dry-run exposes all eligible notices without changing real state.
+                    # Preview with cloned state. BOM reprocess retains ordinary
+                    # update eligibility; explicit resend bypasses deduplication.
                     await replay_source(clone, ReplayTx(self.app.state.tx), s, snapshots[s], True, self.app.state)
                     snapshots[s] = current(clone,s)
                     records = rows(clone, 'SELECT h.* FROM service_history h JOIN '
@@ -211,6 +212,11 @@ class Troubleshooting:
                         elif r['disposition'].startswith(('excluded','filtered','formatting-blocked')):
                             exclusions.append(dict(source=s,reason=r['detail'],count=1))
                     # Already-queued notices remain excluded even from forced preview.
+                    if s == 'bom':
+                        for item in snapshots[s]:
+                            reason = item.get('selection_reason', '')
+                            if reason.startswith('Suppressed:'):
+                                exclusions.append(dict(source=s,reason=reason,count=1))
                     queued = sum(r['transmit_status']=='queued' for r in records)
                     if queued:
                         exclusions.append(dict(source=s,reason='Already queued; duplicate admission suppressed',count=queued))

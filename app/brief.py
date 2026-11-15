@@ -133,6 +133,39 @@ def _location_names(value):
     return unique(re.split(r",\s*|\s+and\s+", value or ""))
 
 
+def bom_risk_clauses(summary):
+    """Named hazards used by both radio formatting and local comparison."""
+    # Extract named hazards conservatively; retain negated statements verbatim.
+    causes = []
+    hazard_names = (
+        (r"damaging winds?", "damaging winds"),
+        (r"destructive winds?", "destructive winds"),
+        (r"large hail(?:stones)?", "large hail"),
+        (r"giant hail(?:stones)?", "giant hail"),
+        (r"(?<!large )(?<!giant )hail(?:stones)?", "hail"),
+        (r"heavy rainfall|heavy rain", "heavy rain"),
+        (r"flash flooding", "flash flooding"),
+        (r"(?<!flash )flooding", "flooding"),
+        (r"storm surge", "storm surge"),
+        (r"hazardous surf|heavy surf", "hazardous surf"),
+        (r"abnormally high tides", "abnormally high tides"),
+        (r"tornado(?:es)?", "tornadoes"),
+        (r"blizzard", "blizzard"),
+        (r"snow", "snow"),
+        (r"heatwave", "heatwave"),
+    )
+    for sentence in re.split(r"(?<=[.!?])\s+", summary):
+        matched = [name for pattern, name in hazard_names if re.search(r"\b(?:" + pattern + r")\b", sentence, re.I)]
+        if matched:
+            if re.search(r"\b(?:not|no|unlikely|without)\b", sentence, re.I):
+                causes.append(sentence)  # Preserve negation rather than invert the warning.
+            else:
+                causes.append("Risk: " + ", ".join(matched))
+        elif re.search(r"flooding", sentence, re.I):
+            causes.append(sentence)
+    return causes
+
+
 def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
                     geographic_coverage=None, scope_evidence=None, episode_reference=None,
                     cancellation=False):
@@ -183,34 +216,7 @@ def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
                 else:
                     cancellations.append(("CANCELLED: " + sentence, ""))
                 summary = summary.replace(sentence, "")
-        # Extract named hazards conservatively; retain negated statements verbatim.
-        causes = []
-        hazard_names = (
-            (r"damaging winds?", "damaging winds"),
-            (r"destructive winds?", "destructive winds"),
-            (r"large hail(?:stones)?", "large hail"),
-            (r"giant hail(?:stones)?", "giant hail"),
-            (r"(?<!large )(?<!giant )hail(?:stones)?", "hail"),
-            (r"heavy rainfall|heavy rain", "heavy rain"),
-            (r"flash flooding", "flash flooding"),
-            (r"(?<!flash )flooding", "flooding"),
-            (r"storm surge", "storm surge"),
-            (r"hazardous surf|heavy surf", "hazardous surf"),
-            (r"abnormally high tides", "abnormally high tides"),
-            (r"tornado(?:es)?", "tornadoes"),
-            (r"blizzard", "blizzard"),
-            (r"snow", "snow"),
-            (r"heatwave", "heatwave"),
-        )
-        for sentence in re.split(r"(?<=[.!?])\s+", summary):
-            matched = [name for pattern, name in hazard_names if re.search(r"\b(?:" + pattern + r")\b", sentence, re.I)]
-            if matched:
-                if re.search(r"\b(?:not|no|unlikely|without)\b", sentence, re.I):
-                    causes.append(sentence)  # Preserve negation rather than invert the warning.
-                else:
-                    causes.append("Risk: " + ", ".join(matched))
-            elif re.search(r"flooding", sentence, re.I):
-                causes.append(sentence)
+        causes = bom_risk_clauses(summary)
         # Unknown warning causes are retained verbatim, rather than guessed or dropped.
         if summary and not causes:
             first = re.split(r"(?<=[.!?])\s+", summary)[0]
@@ -233,5 +239,10 @@ def brief_bom_parts(alert, tz_name, action, budget, *, geographic_settings=None,
         sections, evidence = project_bom_sections(sections, geographic_settings, geographic_coverage)
         if scope_evidence is not None:
             scope_evidence.update(evidence)
-    return brief_parts("BOM", action, topic, sections, optional,
-                       "check bom.gov.au", budget, alert.alert_id, reference=episode_reference)
+    parts = brief_parts("BOM", action, topic, sections, optional,
+                        "check bom.gov.au", budget, alert.alert_id, reference=episode_reference)
+    if scope_evidence is not None:
+        # These are the exact required sections used by the successful renderer.
+        scope_evidence['conveyed_sections'] = sections
+        scope_evidence['conveyed_topic'] = topic
+    return parts

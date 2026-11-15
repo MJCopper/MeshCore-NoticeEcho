@@ -17,7 +17,9 @@
     <p>{{ r.metadata.bom_scope.reason }} · {{ r.metadata.bom_scope.comparison }}</p>
     {% for area in r.metadata.bom_scope.active %}<p>Active selected scope: {{ area.label }}</p>{% endfor %}
     {% for area in r.metadata.bom_scope.cancel %}<p>Cancelled announced scope: {{ area.label }}</p>{% endfor %}
-    {% if r.metadata.bom_scope.uncertain %}<p class="hint">Changes cannot be completely separated by geographic scope. Updates retain conservative whole-warning comparison.</p>{% endif %}
+    {% if r.metadata.bom_scope.information_version %}<p class="hint">Automatic updates compare information conveyed for selected locations. Provider-only changes do not trigger a transmission.</p>
+    {% for area in r.metadata.bom_scope.active %}{% if area.key in r.metadata.bom_scope.changed_scopes %}<p>New or changed information: {{ area.label }}</p>{% endif %}{% endfor %}
+    {% elif r.metadata.bom_scope.uncertain and r.metadata.bom_scope.active %}<p class="hint">Changes cannot be completely separated by geographic scope. This decision retained conservative whole-warning comparison.</p>{% endif %}
   </details>{% endif %}
   <div class="rec-msgrow">
     <div class="rec-msgwrap">

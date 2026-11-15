@@ -2,6 +2,8 @@
 
 Validated on 15 November 2026 using temporary databases, mock radios and Chromium. No running service was restarted, no settings were changed in the configured database, and no radio transmissions were made.
 
+This records the initial scope implementation. The subsequent [local information comparison](bom-information-validation.md) replaces conservative whole-warning UPDATE eligibility; cancellation scope rules remain in place.
+
 The full Python suite passed: **1,296 tests, four existing dependency deprecation warnings**, in 62.45 seconds. Changed Python syntax, local documentation links and `git diff --check` passed. The browser checks below passed all eight combinations.
 
 ## Historical regression evidence
@@ -10,7 +12,7 @@ The full Python suite passed: **1,296 tests, four existing dependency deprecatio
 
 * `#2331-L`: Tamworth/Quirindi introduction followed by six cancellation records. Unrelated or unproven district-only partial cancellations are filtered; explicit full cancellation names remaining announced local scope.
 * `#2331-J`: Armidale introduction followed by four cancellations. Unrelated areas cannot authorize cancellation of that scope.
-* `#2331-F`: all six saved updates remain deliverable under conservative whole-warning comparison.
+* `#2331-F`: the original validation retained all six updates under its former conservative whole-warning rule. Current regression tests suppress reconstructed revisions that convey no changed local information.
 
 ## Regression coverage
 

@@ -125,7 +125,9 @@ async def test_or_matching_is_identical_in_polling_preview_and_resend(area,counc
     service=Troubleshooting(app)
     for mode in ("reprocess","resend"):
         preview=await service.preview("bom",mode)
-        assert preview["notices"]==1 and not preview["errors"]
+        assert preview["notices"]==(0 if mode=='reprocess' else 1) and not preview["errors"]
+        if mode=='reprocess':
+            assert any('no additional information' in entry['reason'] for entry in preview['exclusions'])
         service.start(preview["token"])
         await service.task
         assert service.job["status"]=="completed"

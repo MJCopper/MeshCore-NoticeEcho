@@ -212,7 +212,7 @@ async def test_accepted_bom_introduction_keeps_dry_run_and_live_separate():
     assert metadata(db)['action']=='NEW' and metadata(db)['mode']=='live'
     tx.finish(TxResult('accepted'))
     assert not await process(db,tx,dry=False)
-    assert await process(db,tx,warning(headline='Updated warning'),dry=False)
+    assert await process(db,tx,warning(detail='Destructive winds expected.'),dry=False)
     assert metadata(db)['action']=='UPDATE'
     tx.finish(TxResult('accepted'))
     assert await process(db,tx,warning(message_type='Cancel'),dry=False)

@@ -38,12 +38,13 @@ async def run(db, *, locations='Tamworth, Quirindi', summary='Damaging winds exp
     event='Marine Wind Warning' if sections else 'Severe Thunderstorm Warning'
     raw=dict(id=PRODUCT,region='NSW',event=event,headline=headline or event,area_desc=locations,
              message_type='Cancel' if cancel else 'Alert',references=[] if cancel else [PRODUCT],
-             effective=extra.pop('effective',''),expires=extra.pop('expires',''),detail=extra.pop('detail',''))
+             effective=extra.pop('effective',''),expires=extra.pop('expires',''),detail=extra.pop('detail',''),
+             ends=extra.pop('ends',''),onset=extra.pop('onset',''))
     enrichment=BOMEnrichment(locations=locations,summary=summary,sections=sections,status='available',**extra)
     async def enrich(url):return enrichment
     db.set_setting('dry_run',dry)
     poller=BomPoller(db,radio);poller._enricher=SimpleNamespace(enrich=enrich)
-    result=await poller._process(raw,FilterRules.from_settings(db.all_settings()),'Australia/Sydney',0,dry,
+    result=await poller._process(raw,FilterRules.from_settings(db.all_settings()),'Australia/Sydney',int(db.get_setting('meshcore_channel',0)),dry,
                                  settings=db.all_settings(),force=force,observe=observe)
     return result,raw,radio
 
@@ -158,13 +159,13 @@ async def test_pending_cancellation_is_not_replaced_by_another_provider_revision
 
 
 @pytest.mark.asyncio
-async def test_nov3_unstructured_updates_remain_conservative(db):
-    for locations,summary in [('Armidale, Tamworth, Scone','Damaging winds expected.'),
-                              ('Armidale, Grafton, Katoomba','Damaging winds expected.'),
-                              ('Armidale, Grafton, Nowra','Damaging winds expected.'),
-                              ('Armidale, Grafton, Nowra','Destructive winds expected.')]:
-        assert (await run(db,locations=locations,summary=summary))[0]
-        assert meta(db)['bom_scope']['comparison']=='conservative whole warning'
+async def test_unstructured_updates_require_changed_local_information(db):
+    for locations,summary,expected in [('Armidale, Tamworth, Scone','Damaging winds expected.',True),
+                              ('Armidale, Grafton, Katoomba','Damaging winds expected.',False),
+                              ('Armidale, Grafton, Nowra','Damaging winds expected.',False),
+                              ('Armidale, Grafton, Nowra','Destructive winds expected.',True)]:
+        assert (await run(db,locations=locations,summary=summary))[0] == expected
+        assert meta(db)['bom_scope']['comparison']=='information conveyed for selected locations'
     assert meta(db)['bom_episode']['action']=='UPDATE'
 
 
@@ -175,17 +176,16 @@ async def test_only_proven_unrelated_structured_changes_are_suppressed(db):
     remote=WarningSection('Strong Wind Warning','Sydney Coast','NEW')
     opts=dict(locations='Hunter Coast, Sydney Coast',summary='',sections=(local,remote))
     assert (await run(db,**opts))[0]
-    assert meta(db)['bom_scope']['comparison']=='structured selected sections'
+    assert meta(db)['bom_scope']['comparison']=='information conveyed for selected locations'
     assert not (await run(db,**(opts|dict(sections=(local,replace(remote,phenomenon='Storm Force Wind Warning'))))))[0]
     assert (await run(db,**(opts|dict(sections=(replace(local,phenomenon='Storm Force Wind Warning'),remote)))))[0]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('field,value',[('severity','Severe'),('urgency','Immediate'),('certainty','Observed'),('expires','2099-01-01T00:00:00Z')])
-async def test_shared_warning_changes_always_trigger_update(db,field,value):
+async def test_unconveyed_metadata_and_routine_expiry_do_not_trigger_update(db,field,value):
     await run(db)
-    assert (await run(db,**{field:value}))[0]
-    assert meta(db)['bom_episode']['action']=='UPDATE'
+    assert not (await run(db,**{field:value}))[0]
 
 
 @pytest.mark.asyncio
@@ -394,24 +394,27 @@ async def test_unclassified_structured_area_keeps_conservative_hazard_updates(db
     broad=WarningSection('Strong Wind Warning','New South Wales coastal waters','NEW')
     opts=dict(locations='Hunter Coast',summary='',sections=(local,broad))
     assert (await run(db,**opts))[0]
-    assert meta(db)['bom_scope']['comparison']=='conservative whole warning'
+    assert meta(db)['bom_scope']['comparison']=='information conveyed for selected locations'
     assert (await run(db,**(opts|dict(sections=(local,replace(broad,phenomenon='Storm Force Wind Warning'))))))[0]
     assert 'Storm Force Wind' in last(db)['transmitted_text']
 
 
 @pytest.mark.asyncio
-async def test_all_six_saved_nov3_updates_remain_deliverable(db):
+async def test_saved_nov3_updates_compare_local_information(db):
     import re
     fixture=json.loads((Path(__file__).parent/'fixtures/bom_scope_history.json').read_text())
     rows=[r for r in fixture['records'] if r['episode']=='2331-F']
     assert len(rows)==6
     await run(db,locations='Armidale, Tamworth, Scone, Inverell, Glen Innes, Nowendoc')
+    results=[]
     for row in rows:
         text=re.sub(r'\b\d/\d\s+','',row['text'].replace(' || ',' '))
         places=text.rsplit(' for ',1)[1].split('; check')[0]
         summary='Destructive winds expected.' if 'destructive winds' in text else 'Damaging winds expected.'
-        assert (await run(db,locations=places,summary=summary))[0]
-        assert meta(db)['bom_episode']['action']=='UPDATE'
+        results.append((await run(db,locations=places,summary=summary))[0])
+    # The reconstructed inputs retain local scope/hazard changes, while remote
+    # location changes alone no longer justify each of the six transmissions.
+    assert results == [False, False, False, False, False, True]
 
 
 def test_backup_can_be_taken_before_scope_schema_upgrade(tmp_path):

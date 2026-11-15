@@ -246,8 +246,9 @@ class Episodes:
                 candidate = self.db._conn.execute('SELECT a.*,h.transmitted_text,h.delivery_parts,h.detail,h.disposition,h.metadata,h.revision_hash AS history_revision '
                                                   'FROM bom_announcements a LEFT JOIN service_history h ON h.id=a.history_id '
                                                   "WHERE a.episode_id=? AND a.mode=? AND a.destination=? "
-                                                  "AND (a.introduced=1 OR a.state IN ('queued','submitting') OR a.provenance='legacy-unknown') ORDER BY a.id DESC LIMIT 1",
-                                                  (episode['id'], mode, audience)).fetchone()
+                                                  "AND (a.introduced=1 OR a.state IN ('queued','submitting') OR a.provenance='legacy-unknown' "
+                                                  "OR (? AND a.state IN ('failed','interrupted','deferred'))) ORDER BY a.id DESC LIMIT 1",
+                                                  (episode['id'], mode, audience, scoped)).fetchone()
                 if candidate and candidate['material_hash'] == material_hash:
                     row = candidate
             introduced = self.db._conn.execute('SELECT 1 FROM bom_announcements WHERE episode_id=? AND mode=? AND destination=? AND introduced=1 LIMIT 1',

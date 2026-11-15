@@ -145,7 +145,7 @@ async def test_terms_only_poll_preview_resend_and_deduplication(service):
     service_runner=Troubleshooting(app)
     for mode in ('reprocess','resend'):
         preview=await service_runner.preview(service,mode)
-        assert preview['notices']==1 and not preview['errors']
+        assert preview['notices']==(0 if service=='bom' and mode=='reprocess' else 1) and not preview['errors']
         service_runner.start(preview['token'])
         await service_runner.task
         assert service_runner.job['status']=='completed'

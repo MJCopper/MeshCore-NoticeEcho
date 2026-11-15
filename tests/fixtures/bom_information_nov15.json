@@ -1,0 +1,61 @@
+{
+  "provenance": "Recorded dry-run messages and scope metadata. Original provider revisions are not retained; replay provider inputs are reconstructed.",
+  "episode": "2331-M",
+  "records": [
+    {
+      "history_id": 20713,
+      "timestamp": "2026-11-15T01:46:41+00:00",
+      "text": "1/2 BOM NEW #2331-M Severe Thunderstorm Warning: Risk: damaging winds, large hail for Tamworth, Scone, Cessnock, Maitland, || 2/2 Comboyne, Nowendoc; check bom.gov.au",
+      "action": "NEW",
+      "selected_locations": [
+        "Tamworth"
+      ]
+    },
+    {
+      "history_id": 20789,
+      "timestamp": "2026-11-15T04:09:20+00:00",
+      "text": "1/2 BOM UPDATE #2331-M Severe Thunderstorm Warning: Risk: damaging winds, large hail for Port Macquarie, Taree, Newcastle, || 2/2 Tamworth, Scone, Maitland; check bom.gov.au",
+      "action": "UPDATE",
+      "selected_locations": [
+        "Tamworth"
+      ]
+    },
+    {
+      "history_id": 20806,
+      "timestamp": "2026-11-15T04:39:49+00:00",
+      "text": "1/2 BOM UPDATE #2331-M Severe Thunderstorm Warning: Risk: damaging winds, large hail; Risk: hail for Grafton, Coffs Harbour, || 2/2 Port Macquarie, Taree, Tamworth, Scone; check bom.gov.au",
+      "action": "UPDATE",
+      "selected_locations": [
+        "Tamworth"
+      ]
+    },
+    {
+      "history_id": 20825,
+      "timestamp": "2026-11-15T05:10:20+00:00",
+      "text": "1/2 BOM UPDATE #2331-M Severe Thunderstorm Warning: Risk: damaging winds, large hail; Risk: hail for Lismore, Grafton, || 2/2 Coffs Harbour, Port Macquarie, Taree, Tamworth; check bom.gov.au",
+      "action": "UPDATE",
+      "selected_locations": [
+        "Tamworth"
+      ]
+    },
+    {
+      "history_id": 20856,
+      "timestamp": "2026-11-15T05:51:06+00:00",
+      "text": "1/2 BOM UPDATE #2331-M Severe Thunderstorm Warning: Risk: damaging winds, large hail; Risk: hail for Lismore, Grafton, || 2/2 Coffs Harbour, Port Macquarie, Taree, Armidale, Tamworth; check bom.gov.au",
+      "action": "UPDATE",
+      "selected_locations": [
+        "Armidale",
+        "Tamworth"
+      ]
+    },
+    {
+      "history_id": 20949,
+      "timestamp": "2026-11-15T07:53:18+00:00",
+      "text": "1/2 BOM UPDATE #2331-M Severe Thunderstorm Warning: Risk: damaging winds, large hail; Risk: hail for Lismore, Grafton, || 2/2 Coffs Harbour, Armidale, Tenterfield, Kempsey; check bom.gov.au",
+      "action": "UPDATE",
+      "selected_locations": [
+        "Armidale"
+      ]
+    }
+  ]
+}

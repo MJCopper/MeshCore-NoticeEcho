@@ -172,6 +172,9 @@ class BomPoller:
         if not alert.alert_id:
             return False
         settings = settings or self._db.all_settings()
+        # Reprocess previews use a cloned database, but must make the same
+        # eligibility decision as ordinary polling. Only resend bypasses it.
+        force = force and getattr(self._db, '_bom_preview_resend', True)
         enrichment = None
         if alert.message_type != "Cancel" and alert.references:
             enrichment = await self._enricher.enrich(alert.references[0])
@@ -303,14 +306,15 @@ class BomPoller:
             allow_content_match = not (expanded and not geographic_active(settings))
             if episode:
                 scoped = ScopeStore(self._db).plan(episode, mode, audience, alert, geography, settings,
-                                                   observe=observe, force=force and getattr(self._db, '_bom_preview_resend', True))
+                                                   observe=observe, force=force and getattr(self._db, '_bom_preview_resend', True),
+                                                   budget=budget, tz_name=tz_name)
                 render_alert = scoped['render']
                 item['bom_scope'] = scoped['evidence']
                 material_hash = scoped['evidence']['fingerprint']
                 revision_hash += ':' + material_hash[:16]
                 if scoped['blocked'] or (eligible and scoped['unchanged'] and not force):
                     item.update(selection='included' if eligible else 'excluded',
-                                selection_reason=scoped['evidence']['reason'] if scoped['blocked'] else 'No selected-area or shared warning content changed')
+                                selection_reason=scoped['evidence']['reason'])
                     return False
             episode_record, introduced = episode_store.announcement(episode, mode, audience, revision_hash,
                                                                    allow_content_match=allow_content_match,

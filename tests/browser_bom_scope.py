@@ -24,6 +24,8 @@ fixture=environment.__wrapped__();app=next(fixture);db=app.state.db
 app.include_router(router);client=TestClient(app)
 db.set_setting(KEY,configuration(location_terms=['Tamworth','Quirindi']))
 asyncio.run(run(db))
+asyncio.run(run(db,summary='Destructive winds expected.'))
+assert not asyncio.run(run(db,locations='Tamworth, Quirindi, Sydney',summary='Destructive winds expected.'))[0]
 asyncio.run(run(db,locations='Illawarra',summary='The warning for Sydney is CANCELLED.'))
 asyncio.run(run(db,locations='Illawarra',cancel=True))
 results=[];errors=[]
@@ -54,11 +56,13 @@ with sync_playwright() as p:
      field.check();page.get_by_role('button',name='Save monitoring and polling',exact=True).click()
      page.wait_for_load_state('networkidle');assert db.get_setting('bom_send_cancellations') is True
     else:
-     page.get_by_text('BOM geographic scope decision',exact=True).first.click()
+     page.get_by_text('BOM geographic scope decision',exact=True).evaluate_all('(items)=>items.forEach(item=>item.parentElement.open=true)')
      body=page.inner_text('body')
      assert 'Tamworth' in body and 'Quirindi' in body
      assert 'No previously announced selected scope matches this cancellation' in body
      assert 'Cancelled announced scope: Tamworth' in body
+     assert 'Automatic updates compare information conveyed for selected locations' in body
+     assert 'New or changed information: Tamworth' in body
      texts=page.locator('.rec-msg').all_text_contents()
      cancellation=[text for text in texts if 'CANCELLED' in text]
      assert len(cancellation)==1 and 'Sydney' not in cancellation[0] and 'Illawarra' not in cancellation[0]
